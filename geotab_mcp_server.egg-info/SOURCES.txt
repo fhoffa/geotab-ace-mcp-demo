@@ -1,0 +1,8 @@
+geotab_mcp_server.py
+pyproject.toml
+geotab_mcp_server.egg-info/PKG-INFO
+geotab_mcp_server.egg-info/SOURCES.txt
+geotab_mcp_server.egg-info/dependency_links.txt
+geotab_mcp_server.egg-info/entry_points.txt
+geotab_mcp_server.egg-info/requires.txt
+geotab_mcp_server.egg-info/top_level.txt

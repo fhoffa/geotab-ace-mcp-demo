@@ -1,0 +1,10 @@
+Metadata-Version: 2.4
+Name: geotab-mcp-server
+Version: 0.1.0
+Summary: MCP server for Geotab API integration
+Author-email: Your Name <your.email@example.com>
+Requires-Python: >=3.10
+Requires-Dist: mcp>=1.0.0
+Requires-Dist: aiohttp>=3.8.0
+Requires-Dist: pandas>=1.5.0
+Requires-Dist: fastmcp>=2.11.3
