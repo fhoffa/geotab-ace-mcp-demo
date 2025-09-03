@@ -1,93 +1,309 @@
-# 2025-ace-mcp
+# Geotab ACE MCP Server
 
+An MCP (Model Context Protocol) server that provides Claude with tools to interact with the Geotab ACE AI service. This server enables Claude to ask questions about your fleet data and retrieve structured responses including datasets.
 
+**Note**: This is an experimental project by Geotab's Felipe Hoffa (https://www.linkedin.com/in/hoffa). No official support is provided, but we welcome your feedback through GitHub issues.
 
-## Getting started
+## Features
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+- **Automatic Authentication**: Handles Geotab API authentication transparently
+- **Async Query Support**: Start long-running queries and check their progress
+- **Full Dataset Retrieval**: Downloads complete datasets when available
+- **Multiple Query Workflows**: Synchronous and asynchronous query patterns
+- **Debug Tools**: Built-in debugging for troubleshooting queries
+- **Secure Credential Management**: Uses environment variables for credentials
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+## Quick Start
 
-## Add your files
+### 1. Install Dependencies
 
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+```bash
+uv sync
+```
+
+### 2. Set Up Credentials
+
+Create a `.env` file in the project directory:
+
+```env
+GEOTAB_API_USERNAME=your_username
+GEOTAB_API_PASSWORD=your_password
+GEOTAB_API_DATABASE=your_database_name
+```
+
+### 3. Test the Connection
+
+```bash
+uv run python geotab_ace.py --test
+```
+
+### 4. Configure Claude Desktop
+
+Add to your Claude Desktop configuration file:
+
+**macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+**Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+
+```json
+{
+  "mcpServers": {
+    "geotab": {
+      "command": "uv",
+      "args": ["run", "python", "/absolute/path/to/geotab_mcp_server.py"]
+    }
+  }
+}
+```
+
+Alternative using the installed script:
+```json
+{
+  "mcpServers": {
+    "geotab": {
+      "command": "uv",
+      "args": ["run", "geotab-mcp-server"],
+      "cwd": "/absolute/path/to/project"
+    }
+  }
+}
+```
+
+### 5. Restart Claude Desktop
+
+The server will automatically load credentials from your `.env` file.
+
+## Available Tools
+
+### `geotab_ask_question`
+Ask a question and wait for the complete response (up to 60 seconds by default).
+
+**Example**: "How many vehicles were active last week?"
+
+### `geotab_start_query_async`
+Start a complex query that may take several minutes to process. Returns tracking IDs immediately.
+
+**Use for**: Complex analytics, large data exports, multi-step analyses
+
+### `geotab_check_status`
+Check the progress of an async query using its tracking IDs.
+
+### `geotab_get_results`
+Retrieve complete results from a finished query, including full datasets.
+
+### `geotab_test_connection`
+Test API connectivity and authentication - useful for troubleshooting.
+
+### `geotab_debug_query`
+Get detailed debug information about a query's response structure.
+
+## Usage Patterns
+
+### Simple Questions
+```
+Ask Geotab: "What's our total mileage for this month?"
+```
+
+### Complex Analysis
+```
+Start a complex Geotab analysis: "Generate a detailed fuel efficiency report for all vehicles, broken down by driver and route, for the past 3 months"
+
+[Wait a few minutes, then:]
+
+Check the status of my Geotab query with chat ID [chat_id] and message group ID [message_group_id]
+
+Get the complete results from chat ID [chat_id] and message group ID [message_group_id]
+```
+
+### Troubleshooting
+```
+Test my Geotab connection
+```
+
+## Configuration Options
+
+### Environment Variables
+
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `GEOTAB_API_USERNAME` | Your Geotab username | Yes |
+| `GEOTAB_API_PASSWORD` | Your Geotab password | Yes |
+| `GEOTAB_API_DATABASE` | Your Geotab database name | Yes |
+
+### Alternative: System Environment Variables
+
+Instead of using a `.env` file, you can set system environment variables:
+
+**macOS/Linux:**
+```bash
+export GEOTAB_API_USERNAME="your_username"
+export GEOTAB_API_PASSWORD="your_password"
+export GEOTAB_API_DATABASE="your_database"
+```
+
+**Windows:**
+```cmd
+setx GEOTAB_API_USERNAME "your_username"
+setx GEOTAB_API_PASSWORD "your_password"
+setx GEOTAB_API_DATABASE "your_database"
+```
+
+## Security Considerations
+
+### How Credentials Are Handled
+
+1. **Local Only**: Credentials are only used locally between Claude Desktop and the MCP server
+2. **Never Transmitted**: Your credentials are never sent to Anthropic's servers
+3. **Process Isolation**: The MCP server runs as a separate process with its own memory space
+4. **Session Management**: Authentication tokens are cached for efficiency but expire automatically
+
+### Best Practices
+
+- Use dedicated API accounts with minimal required permissions
+- Rotate credentials regularly
+- Set restrictive file permissions on your `.env` file: `chmod 600 .env`
+- Monitor API usage through your Geotab account
+- Use the test connection tool to verify setup before first use
+
+## Troubleshooting
+
+### Common Issues
+
+**"Authentication failed"**
+- Verify your credentials are correct in the `.env` file
+- Check that your Geotab account has API access
+- Ensure the database name is exact (case-sensitive)
+
+**"No module named 'geotab_ace'"**
+- Make sure both files are in the same directory
+- If using uv, try: `uv run python -c "import geotab_ace"`
+- Ensure you've run `uv sync` to install dependencies
+
+**"Connection timeout"**
+- Check your internet connection
+- Verify Geotab services are operational
+- Try increasing timeout values
+
+**MCP Server Won't Start**
+- Run `uv run python geotab_mcp_server.py test` to diagnose issues
+- Check Claude Desktop logs for error messages
+- Verify the file path in your configuration is correct and uses forward slashes
+
+### Debug Commands
+
+Test the utility directly:
+```bash
+# Test connection
+uv run python geotab_ace.py --test
+
+# Ask a simple question
+uv run python geotab_ace.py --question "How many vehicles do we have?"
+
+# Enable verbose logging
+uv run python geotab_ace.py --question "Show me active vehicles" --verbose
+```
+
+Test the MCP server:
+```bash
+uv run python geotab_mcp_server.py test
+```
+
+## File Structure
 
 ```
-cd existing_repo
-git remote add origin https://git.geotab.com/felipehoffa/2025-ace-mcp.git
-git branch -M main
-git push -uf origin main
+geotab-mcp-server/
+├── geotab_ace.py          # Core API client library
+├── geotab_mcp_server.py   # MCP server implementation
+├── pyproject.toml         # Project configuration and dependencies
+├── .env                   # Your credentials (create this)
+└── README.md             # This file
 ```
 
-## Integrate with your tools
+## Project Setup with uv
 
-- [ ] [Set up project integrations](https://git.geotab.com/felipehoffa/2025-ace-mcp/-/settings/integrations)
+This project uses `uv` for modern Python dependency management. Here's how to work with it:
 
-## Collaborate with your team
+### Install uv (if you haven't already)
+```bash
+# macOS (using Homebrew - recommended)
+brew install uv
 
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+# macOS/Linux (using curl)
+curl -LsSf https://astral.sh/uv/install.sh | sh
 
-## Test and Deploy
+# Windows
+powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
 
-Use the built-in continuous integration in GitLab.
+# Or using pip
+pip install uv
+```
 
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
+### Project Commands
+```bash
+# Install all dependencies
+uv sync
 
-***
+# Run the server directly
+uv run geotab-mcp-server
 
-# Editing this README
+# Run with arguments
+uv run python geotab_ace.py --test
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+# Add a new dependency
+uv add some-package
 
-## Suggestions for a good README
+# Update dependencies
+uv sync --upgrade
+```
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+## API Limits and Timeouts
 
-## Name
-Choose a self-explaining name for your project.
+- **Default question timeout**: 60 seconds
+- **Async query timeout**: 300 seconds (5 minutes)
+- **Session cache**: 1 hour
+- **Connection timeout**: 60 seconds
+- **Polling interval**: Starts at 2 seconds, increases progressively
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+## Dependencies
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+This project uses `pyproject.toml` for dependency management. Key dependencies:
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+- **aiohttp**: Async HTTP client for API calls
+- **pandas**: Data manipulation and CSV processing
+- **python-dotenv**: Environment variable loading
+- **fastmcp**: MCP server framework
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+All dependencies are automatically managed by `uv sync`.
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+## Development
+
+### Running Tests
+```bash
+# Test the core library
+uv run python geotab_ace.py --test --verbose
+
+# Test the MCP server
+uv run python geotab_mcp_server.py test
+```
+
+### Logging
+
+Enable verbose logging by setting the log level:
+```bash
+export GEOTAB_LOG_LEVEL=DEBUG
+```
+
+Or modify the logging configuration in the code.
 
 ## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+For issues with:
+- **Geotab API access**: Contact your Geotab administrator
+- **Credential setup**: Follow the security section above  
+- **MCP integration**: Check the Claude Desktop documentation
+- **This server**: Check the troubleshooting section or review server logs
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+## Version Information
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
-
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
-
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
-
-## License
-For open source projects, say how it is licensed.
-
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+- **API Version**: Uses Geotab API v1
+- **MCP Protocol**: Compatible with Claude Desktop MCP implementation
+- **Python**: Requires Python 3.7+
