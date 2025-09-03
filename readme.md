@@ -1,40 +1,137 @@
-# README.md
-# Geotab MCP Server
+# Geotab ACE MCP Server
 
-An MCP (Model Context Protocol) server that provides tools for interacting with the Geotab API with automatic authentication.
+An MCP (Model Context Protocol) server that provides Claude with tools to interact with the Geotab ACE AI service. This server enables Claude to ask questions about your fleet data and retrieve structured responses including datasets.
+
+**Note**: This is an experimental project by Geotab's Felipe Hoffa (https://www.linkedin.com/in/hoffa). No official support is provided, but we welcome your feedback through GitHub issues.
 
 ## Features
 
-- **Auto-authentication**: Automatically authenticates when needed using environment variables
-- **Secure credential management**: Uses .env files or environment variables  
-- **No manual auth needed**: Claude doesn't need to call authenticate - it's handled transparently
-- **Full dataset retrieval**: Can download complete datasets from Geotab queries
+- **Automatic Authentication**: Handles Geotab API authentication transparently
+- **Async Query Support**: Start long-running queries and check their progress
+- **Full Dataset Retrieval**: Downloads complete datasets when available
+- **Multiple Query Workflows**: Synchronous and asynchronous query patterns
+- **Debug Tools**: Built-in debugging for troubleshooting queries
+- **Secure Credential Management**: Uses environment variables for credentials
 
-## Installation
+## Quick Start
 
-1. Install the package:
+### 1. Install Dependencies
+
 ```bash
-pip install -r requirements.txt
+uv sync
 ```
 
-2. Make the server executable:
-```bash
-chmod +x geotab_mcp_server.py
-```
+### 2. Set Up Credentials
 
-## Credential Setup
-
-### Method 1: .env File (Recommended)
-
-Create a `.env` file in the same directory as the server:
+Create a `.env` file in the project directory:
 
 ```env
-GEOTAB_API_USERNAME=your_username_here
-GEOTAB_API_PASSWORD=your_password_here  
-GEOTAB_API_DATABASE=your_database_here
+GEOTAB_API_USERNAME=your_username
+GEOTAB_API_PASSWORD=your_password
+GEOTAB_API_DATABASE=your_database_name
 ```
 
-### Method 2: System Environment Variables
+### 3. Test the Connection
+
+```bash
+uv run python geotab_ace.py --test
+```
+
+### 4. Configure Claude Desktop
+
+Add to your Claude Desktop configuration file:
+
+**macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+**Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+
+```json
+{
+  "mcpServers": {
+    "geotab": {
+      "command": "uv",
+      "args": ["run", "python", "/absolute/path/to/geotab_mcp_server.py"]
+    }
+  }
+}
+```
+
+Alternative using the installed script:
+```json
+{
+  "mcpServers": {
+    "geotab": {
+      "command": "uv",
+      "args": ["run", "geotab-mcp-server"],
+      "cwd": "/absolute/path/to/project"
+    }
+  }
+}
+```
+
+### 5. Restart Claude Desktop
+
+The server will automatically load credentials from your `.env` file.
+
+## Available Tools
+
+### `geotab_ask_question`
+Ask a question and wait for the complete response (up to 60 seconds by default).
+
+**Example**: "How many vehicles were active last week?"
+
+### `geotab_start_query_async`
+Start a complex query that may take several minutes to process. Returns tracking IDs immediately.
+
+**Use for**: Complex analytics, large data exports, multi-step analyses
+
+### `geotab_check_status`
+Check the progress of an async query using its tracking IDs.
+
+### `geotab_get_results`
+Retrieve complete results from a finished query, including full datasets.
+
+### `geotab_test_connection`
+Test API connectivity and authentication - useful for troubleshooting.
+
+### `geotab_debug_query`
+Get detailed debug information about a query's response structure.
+
+## Usage Patterns
+
+### Simple Questions
+```
+Ask Geotab: "What's our total mileage for this month?"
+```
+
+### Complex Analysis
+```
+Start a complex Geotab analysis: "Generate a detailed fuel efficiency report for all vehicles, broken down by driver and route, for the past 3 months"
+
+[Wait a few minutes, then:]
+
+Check the status of my Geotab query with chat ID [chat_id] and message group ID [message_group_id]
+
+Get the complete results from chat ID [chat_id] and message group ID [message_group_id]
+```
+
+### Troubleshooting
+```
+Test my Geotab connection
+```
+
+## Configuration Options
+
+### Environment Variables
+
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `GEOTAB_API_USERNAME` | Your Geotab username | Yes |
+| `GEOTAB_API_PASSWORD` | Your Geotab password | Yes |
+| `GEOTAB_API_DATABASE` | Your Geotab database name | Yes |
+
+### Alternative: System Environment Variables
+
+Instead of using a `.env` file, you can set system environment variables:
 
 **macOS/Linux:**
 ```bash
@@ -46,173 +143,167 @@ export GEOTAB_API_DATABASE="your_database"
 **Windows:**
 ```cmd
 setx GEOTAB_API_USERNAME "your_username"
-setx GEOTAB_API_PASSWORD "your_password" 
+setx GEOTAB_API_PASSWORD "your_password"
 setx GEOTAB_API_DATABASE "your_database"
 ```
 
-## Security & Credential Management
+## Security Considerations
 
-### How Claude Desktop Keeps Credentials Safe
+### How Credentials Are Handled
 
-Claude Desktop handles credentials securely through several mechanisms:
+1. **Local Only**: Credentials are only used locally between Claude Desktop and the MCP server
+2. **Never Transmitted**: Your credentials are never sent to Anthropic's servers
+3. **Process Isolation**: The MCP server runs as a separate process with its own memory space
+4. **Session Management**: Authentication tokens are cached for efficiency but expire automatically
 
-1. **Environment Variables in Process Isolation**: When you set credentials in the MCP server configuration, they're passed as environment variables to the server process. Claude Desktop itself never sees or stores your actual credentials.
+### Best Practices
 
-2. **Process Separation**: The MCP server runs as a separate process from Claude Desktop. Your credentials only exist in the server's memory space.
+- Use dedicated API accounts with minimal required permissions
+- Rotate credentials regularly
+- Set restrictive file permissions on your `.env` file: `chmod 600 .env`
+- Monitor API usage through your Geotab account
+- Use the test connection tool to verify setup before first use
 
-3. **Local Configuration**: Your `claude_desktop_config.json` file is stored locally on your machine and never transmitted to Anthropic's servers.
+## Troubleshooting
 
-### Recommended Setup Methods
+### Common Issues
 
-#### Method 1: Environment Variables (Most Secure)
+**"Authentication failed"**
+- Verify your credentials are correct in the `.env` file
+- Check that your Geotab account has API access
+- Ensure the database name is exact (case-sensitive)
 
-Set your credentials as system environment variables:
+**"No module named 'geotab_ace'"**
+- Make sure both files are in the same directory
+- If using uv, try: `uv run python -c "import geotab_ace"`
+- Ensure you've run `uv sync` to install dependencies
 
-**macOS/Linux:**
+**"Connection timeout"**
+- Check your internet connection
+- Verify Geotab services are operational
+- Try increasing timeout values
+
+**MCP Server Won't Start**
+- Run `uv run python geotab_mcp_server.py test` to diagnose issues
+- Check Claude Desktop logs for error messages
+- Verify the file path in your configuration is correct and uses forward slashes
+
+### Debug Commands
+
+Test the utility directly:
 ```bash
-export GEOTAB_API_USERNAME="your_username"
-export GEOTAB_API_PASSWORD="your_password"
-export GEOTAB_API_DATABASE="your_database"
+# Test connection
+uv run python geotab_ace.py --test
+
+# Ask a simple question
+uv run python geotab_ace.py --question "How many vehicles do we have?"
+
+# Enable verbose logging
+uv run python geotab_ace.py --question "Show me active vehicles" --verbose
 ```
 
-Then configure Claude Desktop **without** credentials in the env section:
-
-```json
-{
-  "mcpServers": {
-    "geotab": {
-      "command": "python",
-      "args": ["/path/to/geotab_mcp_server.py"]
-    }
-  }
-}
+Test the MCP server:
+```bash
+uv run python geotab_mcp_server.py test
 ```
 
-**Windows:**
-```cmd
-setx GEOTAB_API_USERNAME "your_username"
-setx GEOTAB_API_PASSWORD "your_password" 
-setx GEOTAB_API_DATABASE "your_database"
-```
-
-#### Method 2: Configuration File Environment Variables (Convenient)
-
-If you prefer to keep credentials with the configuration:
-
-```json
-{
-  "mcpServers": {
-    "geotab": {
-      "command": "python",
-      "args": ["/path/to/geotab_mcp_server.py"],
-      "env": {
-        "GEOTAB_API_USERNAME": "your_username",
-        "GEOTAB_API_PASSWORD": "your_password",
-        "GEOTAB_API_DATABASE": "your_database"
-      }
-    }
-  }
-}
-```
-
-### What Happens to Your Credentials
-
-1. **Never sent to Anthropic**: Your credentials are only used locally between Claude Desktop and your MCP server
-2. **Not logged**: The server is designed not to log sensitive information
-3. **Memory only**: Credentials are stored in the server process memory, not written to disk
-4. **Process termination**: When Claude Desktop closes, the server process terminates and credentials are cleared from memory
-
-### Additional Security Tips
-
-- Use dedicated Geotab API accounts with minimal necessary permissions
-- Regularly rotate your API credentials
-- Consider using API keys instead of username/password if Geotab supports them
-- Set appropriate file permissions on your configuration file (e.g., `chmod 600`)
-
-## Configuration
-
-Add this server to your Claude Desktop configuration:
-
-### macOS
-Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "geotab": {
-      "command": "python",
-      "args": ["/path/to/geotab_mcp_server.py"],
-      "env": {
-        "GEOTAB_API_USERNAME": "your_username",
-        "GEOTAB_API_PASSWORD": "your_password",
-        "GEOTAB_API_DATABASE": "your_database"
-      }
-    }
-  }
-}
-```
-
-### Windows
-Edit `%APPDATA%\Claude\claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "geotab": {
-      "command": "python",
-      "args": ["C:\\path\\to\\geotab_mcp_server.py"],
-      "env": {
-        "GEOTAB_API_USERNAME": "your_username",
-        "GEOTAB_API_PASSWORD": "your_password",
-        "GEOTAB_API_DATABASE": "your_database"
-      }
-    }
-  }
-}
-```
-
-## Usage
-
-The server provides three main tools:
-
-1. **geotab_authenticate** - Authenticate with the Geotab API
-2. **geotab_ask_question** - Ask questions to the Geotab AI service
-3. **geotab_get_chat_data** - Retrieve full datasets from previous questions
-
-## Environment Variables
-
-You can set these environment variables instead of passing credentials directly:
-
-- `GEOTAB_API_USERNAME`
-- `GEOTAB_API_PASSWORD` 
-- `GEOTAB_API_DATABASE`
-
-## Example Usage in Claude
-
-Once configured, you can use commands like:
+## File Structure
 
 ```
-Please authenticate with Geotab using the configured credentials.
-
-Ask Geotab: "Show me the top 5 vehicles with the highest fuel consumption this month"
-
-Get the full data from the previous query.
+geotab-mcp-server/
+├── geotab_ace.py          # Core API client library
+├── geotab_mcp_server.py   # MCP server implementation
+├── pyproject.toml         # Project configuration and dependencies
+├── .env                   # Your credentials (create this)
+└── README.md             # This file
 ```
 
-Note: You no longer need to provide credentials directly to Claude - they're securely loaded from environment variables.
+## Project Setup with uv
 
-## Security Notes
+This project uses `uv` for modern Python dependency management. Here's how to work with it:
 
-- Store credentials as environment variables rather than hardcoding them
-- The server handles authentication securely and doesn't log sensitive information
-- Consider using encrypted storage for production deployments
+### Install uv (if you haven't already)
+```bash
+# macOS (using Homebrew - recommended)
+brew install uv
+
+# macOS/Linux (using curl)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Windows
+powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+
+# Or using pip
+pip install uv
+```
+
+### Project Commands
+```bash
+# Install all dependencies
+uv sync
+
+# Run the server directly
+uv run geotab-mcp-server
+
+# Run with arguments
+uv run python geotab_ace.py --test
+
+# Add a new dependency
+uv add some-package
+
+# Update dependencies
+uv sync --upgrade
+```
+
+## API Limits and Timeouts
+
+- **Default question timeout**: 60 seconds
+- **Async query timeout**: 300 seconds (5 minutes)
+- **Session cache**: 1 hour
+- **Connection timeout**: 60 seconds
+- **Polling interval**: Starts at 2 seconds, increases progressively
+
+## Dependencies
+
+This project uses `pyproject.toml` for dependency management. Key dependencies:
+
+- **aiohttp**: Async HTTP client for API calls
+- **pandas**: Data manipulation and CSV processing
+- **python-dotenv**: Environment variable loading
+- **fastmcp**: MCP server framework
+
+All dependencies are automatically managed by `uv sync`.
 
 ## Development
 
-To run the server directly for testing:
-
+### Running Tests
 ```bash
-python geotab_mcp_server.py
+# Test the core library
+uv run python geotab_ace.py --test --verbose
+
+# Test the MCP server
+uv run python geotab_mcp_server.py test
 ```
 
-The server will start and listen for MCP protocol messages on stdin/stdout.
+### Logging
+
+Enable verbose logging by setting the log level:
+```bash
+export GEOTAB_LOG_LEVEL=DEBUG
+```
+
+Or modify the logging configuration in the code.
+
+## Support
+
+For issues with:
+- **Geotab API access**: Contact your Geotab administrator
+- **Credential setup**: Follow the security section above  
+- **MCP integration**: Check the Claude Desktop documentation
+- **This server**: Check the troubleshooting section or review server logs
+
+## Version Information
+
+- **API Version**: Uses Geotab API v1
+- **MCP Protocol**: Compatible with Claude Desktop MCP implementation
+- **Python**: Requires Python 3.7+

@@ -7,13 +7,17 @@ Uses the geotab_ace utility library for clean separation of concerns.
 """
 
 import asyncio
+import json
 import logging
 import sys
 import traceback
 from typing import Optional
 
 from fastmcp import FastMCP
-from geotab_ace import GeotabACEClient, QueryStatus, GeotabACEError, AuthenticationError, APIError, TimeoutError
+from geotab_ace import (
+    GeotabACEClient, QueryStatus, 
+    GeotabACEError, AuthenticationError, APIError, TimeoutError
+)
 
 # Configure logging
 logging.basicConfig(
@@ -29,12 +33,14 @@ mcp = FastMCP("geotab-mcp-server")
 # Global client instance
 ace_client: Optional[GeotabACEClient] = None
 
+
 def get_ace_client() -> GeotabACEClient:
     """Get or create the ACE client instance."""
     global ace_client
     if ace_client is None:
         ace_client = GeotabACEClient()
     return ace_client
+
 
 def format_query_result(result, chat_id: str = "", message_group_id: str = "") -> str:
     """Format a QueryResult for display."""
@@ -78,81 +84,6 @@ def format_query_result(result, chat_id: str = "", message_group_id: str = "") -
         
     return "\n\n".join(parts)
 
-@mcp.tool()
-async def geotab_debug_raw_response(chat_id: str, message_group_id: str) -> str:
-    """
-    Debug function to show the complete raw response structure.
-    
-    Args:
-        chat_id (str): Chat ID from a previous question
-        message_group_id (str): Message group ID from a previous question
-        
-    Returns:
-        str: Complete raw response data for debugging
-    """
-    try:
-        if not chat_id or not message_group_id:
-            return "Error: Both chat_id and message_group_id are required"
-            
-        client = get_ace_client()
-        result = await client.get_query_status(chat_id, message_group_id)
-        
-        if result.raw_response:
-            import json
-            # Format the raw response for display
-            raw_json = json.dumps(result.raw_response, indent=2)
-            
-            # Truncate if too long for display
-            if len(raw_json) > 5000:
-                raw_json = raw_json[:5000] + "\n... (truncated)"
-                
-            return f"**Raw Response Structure:**\n```json\n{raw_json}\n```"
-        else:
-            return "No raw response available"
-        
-    except Exception as e:
-        logger.error(f"Error in debug raw response: {e}")
-        return f"Debug Error: {str(e)}"
-async def geotab_debug_query(chat_id: str, message_group_id: str) -> str:
-    """
-    Debug function to see raw response data from a query.
-    
-    Args:
-        chat_id (str): Chat ID from a previous question
-        message_group_id (str): Message group ID from a previous question
-        
-    Returns:
-        str: Raw debug information about the query response
-    """
-    try:
-        if not chat_id or not message_group_id:
-            return "❌ Error: Both chat_id and message_group_id are required"
-            
-        logger.info(f"Debug query for {chat_id}/{message_group_id}")
-        
-        client = get_ace_client()
-        result = await client.get_query_status(chat_id, message_group_id)
-        
-        debug_info = []
-        debug_info.append(f"**Status**: {result.status.value}")
-        debug_info.append(f"**Has text_response**: {bool(result.text_response)} (length: {len(result.text_response) if result.text_response else 0})")
-        debug_info.append(f"**Has data_frame**: {result.data_frame is not None}")
-        if result.data_frame is not None:
-            debug_info.append(f"**Data shape**: {result.data_frame.shape}")
-        debug_info.append(f"**Has preview_data**: {bool(result.preview_data)}")
-        if result.preview_data:
-            debug_info.append(f"**Preview data**: {result.preview_data}")
-        debug_info.append(f"**Has signed_urls**: {bool(result.signed_urls)}")
-        debug_info.append(f"**Has error**: {bool(result.error)}")
-        
-        if result.text_response:
-            debug_info.append(f"**Text Response Preview**: {result.text_response[:200]}...")
-            
-        return "\n".join(debug_info)
-        
-    except Exception as e:
-        logger.error(f"Error in debug query: {e}")
-        return f"💥 **Debug Error**: {str(e)}"
 
 @mcp.tool()
 async def geotab_ask_question(question: str, timeout_seconds: int = 60) -> str:
@@ -217,6 +148,7 @@ Use `geotab_get_results('{chat_id}', '{message_group_id}')` to get results when 
         logger.error(traceback.format_exc())
         return f"💥 **Unexpected Error**: {str(e)}\n\nPlease check the server logs for details."
 
+
 @mcp.tool()
 async def geotab_check_status(chat_id: str, message_group_id: str) -> str:
     """
@@ -254,6 +186,7 @@ async def geotab_check_status(chat_id: str, message_group_id: str) -> str:
         logger.error(traceback.format_exc())
         return f"💥 **Error**: {str(e)}"
 
+
 @mcp.tool()
 async def geotab_get_results(chat_id: str, message_group_id: str, include_full_data: bool = True) -> str:
     """
@@ -275,13 +208,6 @@ async def geotab_get_results(chat_id: str, message_group_id: str, include_full_d
         
         client = get_ace_client()
         result = await client.get_query_status(chat_id, message_group_id)
-        
-        # Debug logging to help track down issues
-        logger.debug(f"Query status: {result.status}")
-        logger.debug(f"Has text_response: {bool(result.text_response)}")
-        logger.debug(f"Has data_frame: {result.data_frame is not None}")
-        logger.debug(f"Has preview_data: {bool(result.preview_data)}")
-        logger.debug(f"Has signed_urls: {bool(result.signed_urls)}")
         
         if result.status != QueryStatus.DONE:
             if result.status == QueryStatus.FAILED:
@@ -340,6 +266,7 @@ async def geotab_get_results(chat_id: str, message_group_id: str, include_full_d
         logger.error(traceback.format_exc())
         return f"💥 **Error**: {str(e)}"
 
+
 @mcp.tool()
 async def geotab_start_query_async(question: str) -> str:
     """
@@ -386,6 +313,7 @@ async def geotab_start_query_async(question: str) -> str:
         logger.error(f"Error starting async query: {e}")
         logger.error(traceback.format_exc())
         return f"💥 **Error**: {str(e)}"
+
 
 @mcp.tool()
 async def geotab_test_connection() -> str:
@@ -464,6 +392,50 @@ GEOTAB_API_DATABASE=your_database
 2. Restart the MCP server
 3. Check server logs for detailed error information"""
 
+
+@mcp.tool()
+async def geotab_debug_query(chat_id: str, message_group_id: str) -> str:
+    """
+    Debug function to see raw response data from a query.
+    
+    Args:
+        chat_id (str): Chat ID from a previous question
+        message_group_id (str): Message group ID from a previous question
+        
+    Returns:
+        str: Raw debug information about the query response
+    """
+    try:
+        if not chat_id or not message_group_id:
+            return "❌ Error: Both chat_id and message_group_id are required"
+            
+        logger.info(f"Debug query for {chat_id}/{message_group_id}")
+        
+        client = get_ace_client()
+        result = await client.get_query_status(chat_id, message_group_id)
+        
+        debug_info = []
+        debug_info.append(f"**Status**: {result.status.value}")
+        debug_info.append(f"**Has text_response**: {bool(result.text_response)} (length: {len(result.text_response) if result.text_response else 0})")
+        debug_info.append(f"**Has data_frame**: {result.data_frame is not None}")
+        if result.data_frame is not None:
+            debug_info.append(f"**Data shape**: {result.data_frame.shape}")
+        debug_info.append(f"**Has preview_data**: {bool(result.preview_data)}")
+        if result.preview_data:
+            debug_info.append(f"**Preview data**: {result.preview_data}")
+        debug_info.append(f"**Has signed_urls**: {bool(result.signed_urls)}")
+        debug_info.append(f"**Has error**: {bool(result.error)}")
+        
+        if result.text_response:
+            debug_info.append(f"**Text Response Preview**: {result.text_response[:200]}...")
+            
+        return "\n".join(debug_info)
+        
+    except Exception as e:
+        logger.error(f"Error in debug query: {e}")
+        return f"💥 **Debug Error**: {str(e)}"
+
+
 @mcp.resource("geotab://status")
 def get_server_status():
     """Get current server status."""
@@ -478,7 +450,8 @@ def get_server_status():
                 "geotab_check_status", 
                 "geotab_get_results",
                 "geotab_start_query_async",
-                "geotab_test_connection"
+                "geotab_test_connection",
+                "geotab_debug_query"
             ]
         }
     except Exception as e:
@@ -487,6 +460,7 @@ def get_server_status():
             "status": "error",
             "error": str(e)
         }
+
 
 def main():
     """Main function to run the MCP server."""
@@ -514,6 +488,7 @@ def main():
         logger.error(f"Fatal error in main: {e}")
         logger.error(traceback.format_exc())
         raise
+
 
 if __name__ == "__main__":
     try:

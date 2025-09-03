@@ -11,7 +11,6 @@ import json
 import logging
 import os
 import time
-import traceback
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass
 from enum import Enum
@@ -27,21 +26,27 @@ load_dotenv()
 # Configure logging
 logger = logging.getLogger("geotab-ace")
 
+
 class QueryStatus(Enum):
+    """Status values for ACE queries."""
     PENDING = "PENDING"
-    PROCESSING = "PROCESSING"
+    PROCESSING = "PROCESSING" 
     DONE = "DONE"
     FAILED = "FAILED"
     UNKNOWN = "UNKNOWN"
 
+
 @dataclass
 class GeotabCredentials:
+    """Credentials for Geotab authentication."""
     username: str
     password: str
     database: str
 
+
 @dataclass
 class QueryResult:
+    """Result object containing query response data."""
     status: QueryStatus
     text_response: str = ""
     data_frame: Optional[pd.DataFrame] = None
@@ -50,21 +55,26 @@ class QueryResult:
     error: Optional[str] = None
     raw_response: Optional[Dict] = None
 
+
 class GeotabACEError(Exception):
     """Base exception for Geotab ACE operations."""
     pass
+
 
 class AuthenticationError(GeotabACEError):
     """Raised when authentication fails."""
     pass
 
+
 class APIError(GeotabACEError):
     """Raised when API calls fail."""
     pass
 
+
 class TimeoutError(GeotabACEError):
     """Raised when operations timeout."""
     pass
+
 
 class GeotabACEClient:
     """
@@ -78,7 +88,13 @@ class GeotabACEClient:
             print(result.data_frame.head())
     """
     
-    def __init__(self, credentials: Optional[GeotabCredentials] = None, api_url: str = "https://alpha.geotab.com/apiv1"):
+    # Class constants
+    DEFAULT_API_URL = "https://alpha.geotab.com/apiv1"
+    DEFAULT_TIMEOUT = 60
+    SESSION_TIMEOUT = 3600  # 1 hour
+    
+    def __init__(self, credentials: Optional[GeotabCredentials] = None, 
+                 api_url: str = DEFAULT_API_URL):
         """
         Initialize the client.
         
@@ -93,18 +109,32 @@ class GeotabACEClient:
         
     def _load_credentials_from_env(self) -> GeotabCredentials:
         """Load credentials from environment variables."""
-        username = os.getenv("GEOTAB_API_USERNAME")
-        password = os.getenv("GEOTAB_API_PASSWORD")
-        database = os.getenv("GEOTAB_API_DATABASE")
+        required_vars = {
+            "GEOTAB_API_USERNAME": "username",
+            "GEOTAB_API_PASSWORD": "password", 
+            "GEOTAB_API_DATABASE": "database"
+        }
         
-        if not all([username, password, database]):
-            missing = []
-            if not username: missing.append("GEOTAB_API_USERNAME")
-            if not password: missing.append("GEOTAB_API_PASSWORD")
-            if not database: missing.append("GEOTAB_API_DATABASE")
+        values = {}
+        missing = []
+        
+        for env_var, field_name in required_vars.items():
+            value = os.getenv(env_var)
+            if value:
+                values[field_name] = value
+            else:
+                missing.append(env_var)
+        
+        if missing:
             raise AuthenticationError(f"Missing environment variables: {', '.join(missing)}")
             
-        return GeotabCredentials(username=username, password=password, database=database)
+        return GeotabCredentials(**values)
+    
+    def _is_session_valid(self) -> bool:
+        """Check if current session credentials are still valid."""
+        return (self.session_credentials is not None and 
+                self.last_auth_time is not None and
+                time.time() - self.last_auth_time < self.SESSION_TIMEOUT)
     
     async def authenticate(self) -> Dict:
         """
@@ -116,10 +146,8 @@ class GeotabACEClient:
         Raises:
             AuthenticationError: If authentication fails
         """
-        # Check if we have valid cached credentials (valid for 1 hour)
-        if (self.session_credentials and self.last_auth_time and 
-            time.time() - self.last_auth_time < 3600):
-            logger.debug("Using cached credentials")
+        if self._is_session_valid():
+            logger.debug("Using cached authentication credentials")
             return self.session_credentials
             
         auth_data = {
@@ -134,30 +162,9 @@ class GeotabACEClient:
         logger.info(f"Authenticating with database: {self.credentials.database}")
         
         try:
-            connector = aiohttp.TCPConnector(
-                limit=10,
-                ttl_dns_cache=300,
-                use_dns_cache=True,
-                keepalive_timeout=30,
-                enable_cleanup_closed=True
-            )
-            
-            timeout = aiohttp.ClientTimeout(
-                total=60,
-                connect=15,
-                sock_read=45
-            )
-            
-            async with aiohttp.ClientSession(
-                headers={
-                    "Content-Type": "application/json",
-                    "User-Agent": "GeotabACEClient/1.0",
-                    "Accept": "application/json"
-                },
-                timeout=timeout,
-                connector=connector
-            ) as session:
-                async with session.post(self.api_url, data=json.dumps(auth_data)) as response:
+            session_config = self._create_session_config()
+            async with aiohttp.ClientSession(**session_config) as session:
+                async with session.post(self.api_url, json=auth_data) as response:
                     response.raise_for_status()
                     auth_result = await response.json()
                     
@@ -165,7 +172,43 @@ class GeotabACEClient:
             raise AuthenticationError(f"Network error during authentication: {e}")
         except json.JSONDecodeError as e:
             raise AuthenticationError(f"Invalid JSON response: {e}")
-            
+        
+        self._validate_auth_response(auth_result)
+        
+        self.session_credentials = auth_result["result"]["credentials"]
+        self.last_auth_time = time.time()
+        logger.info(f"Successfully authenticated with database '{self.credentials.database}'")
+        
+        return self.session_credentials
+    
+    def _create_session_config(self, timeout: int = DEFAULT_TIMEOUT) -> Dict[str, Any]:
+        """Create aiohttp session configuration."""
+        connector = aiohttp.TCPConnector(
+            limit=10,
+            ttl_dns_cache=300,
+            use_dns_cache=True,
+            keepalive_timeout=30,
+            enable_cleanup_closed=True
+        )
+        
+        timeout_config = aiohttp.ClientTimeout(
+            total=timeout,
+            connect=15,
+            sock_read=timeout - 15
+        )
+        
+        return {
+            "headers": {
+                "Content-Type": "application/json",
+                "User-Agent": "GeotabACEClient/1.0",
+                "Accept": "application/json"
+            },
+            "timeout": timeout_config,
+            "connector": connector
+        }
+    
+    def _validate_auth_response(self, auth_result: Dict) -> None:
+        """Validate authentication response structure."""
         if "error" in auth_result:
             error_msg = auth_result["error"].get("message", "Unknown authentication error")
             error_code = auth_result["error"].get("code", "Unknown")
@@ -173,14 +216,9 @@ class GeotabACEClient:
             
         if "result" not in auth_result or "credentials" not in auth_result["result"]:
             raise AuthenticationError("Invalid authentication response structure")
-            
-        self.session_credentials = auth_result["result"]["credentials"]
-        self.last_auth_time = time.time()
-        logger.info(f"✅ Successfully authenticated with database '{self.credentials.database}'")
-        
-        return self.session_credentials
     
-    async def _make_api_call(self, function_name: str, function_parameters: Dict, timeout_seconds: int = 90) -> Dict:
+    async def _make_api_call(self, function_name: str, function_parameters: Dict, 
+                           timeout_seconds: int = DEFAULT_TIMEOUT) -> Dict:
         """
         Make an authenticated API call to Geotab ACE.
         
@@ -211,30 +249,9 @@ class GeotabACEClient:
         logger.debug(f"Making API call: {function_name} (timeout: {timeout_seconds}s)")
         
         try:
-            connector = aiohttp.TCPConnector(
-                limit=10,
-                ttl_dns_cache=300,
-                use_dns_cache=True,
-                keepalive_timeout=60,
-                enable_cleanup_closed=True
-            )
-            
-            timeout = aiohttp.ClientTimeout(
-                total=timeout_seconds,
-                connect=15,
-                sock_read=timeout_seconds - 15
-            )
-            
-            async with aiohttp.ClientSession(
-                headers={
-                    "Content-Type": "application/json",
-                    "User-Agent": "GeotabACEClient/1.0",
-                    "Accept": "application/json"
-                },
-                timeout=timeout,
-                connector=connector
-            ) as session:
-                async with session.post(self.api_url, data=json.dumps(request_data)) as response:
+            session_config = self._create_session_config(timeout_seconds)
+            async with aiohttp.ClientSession(**session_config) as session:
+                async with session.post(self.api_url, json=request_data) as response:
                     response.raise_for_status()
                     result = await response.json()
                     
@@ -242,7 +259,7 @@ class GeotabACEClient:
             raise APIError(f"Network error in API call '{function_name}': {e}")
         except json.JSONDecodeError as e:
             raise APIError(f"Invalid JSON response from API call '{function_name}': {e}")
-            
+        
         if "error" in result:
             error_msg = result["error"].get("message", "Unknown API error")
             error_code = result["error"].get("code", "Unknown")
@@ -263,6 +280,7 @@ class GeotabACEClient:
             
         Raises:
             APIError: If starting the query fails
+            ValueError: If question is empty
         """
         if not question or not question.strip():
             raise ValueError("Question cannot be empty")
@@ -270,29 +288,32 @@ class GeotabACEClient:
         logger.info(f"Starting query: {question[:100]}...")
         
         # Create chat
-        create_chat_result = await self._make_api_call("create-chat", {}, timeout_seconds=60)
-        
-        chat_id_path = create_chat_result.get("result", {}).get("apiResult", {}).get("results", [])
-        if not chat_id_path:
-            raise APIError("Failed to create chat session")
-            
-        chat_id = chat_id_path[0]["chat_id"]
-        logger.debug(f"Created chat with ID: {chat_id}")
+        create_chat_result = await self._make_api_call("create-chat", {})
+        chat_id = self._extract_chat_id(create_chat_result)
         
         # Send prompt
         send_prompt_result = await self._make_api_call("send-prompt", {
             "chat_id": chat_id,
             "prompt": question.strip()
-        }, timeout_seconds=60)
+        })
+        message_group_id = self._extract_message_group_id(send_prompt_result)
         
-        msg_group_path = send_prompt_result.get("result", {}).get("apiResult", {}).get("results", [])
-        if not msg_group_path:
-            raise APIError("Failed to send prompt")
-            
-        msg_group_id = msg_group_path[0]["message_group"]["id"]
-        logger.debug(f"Created message group with ID: {msg_group_id}")
-        
-        return chat_id, msg_group_id
+        logger.debug(f"Query started: chat_id={chat_id}, message_group_id={message_group_id}")
+        return chat_id, message_group_id
+    
+    def _extract_chat_id(self, response: Dict) -> str:
+        """Extract chat ID from create-chat response."""
+        results = response.get("result", {}).get("apiResult", {}).get("results", [])
+        if not results:
+            raise APIError("Failed to create chat session - no results returned")
+        return results[0]["chat_id"]
+    
+    def _extract_message_group_id(self, response: Dict) -> str:
+        """Extract message group ID from send-prompt response."""
+        results = response.get("result", {}).get("apiResult", {}).get("results", [])
+        if not results:
+            raise APIError("Failed to send prompt - no results returned")
+        return results[0]["message_group"]["id"]
     
     async def get_query_status(self, chat_id: str, message_group_id: str) -> QueryResult:
         """
@@ -312,94 +333,103 @@ class GeotabACEClient:
             result = await self._make_api_call("get-message-group", {
                 "chat_id": chat_id,
                 "message_group_id": message_group_id
-            }, timeout_seconds=45)
+            })
             
-            status_path = result.get("result", {}).get("apiResult", {}).get("results", [])
-            if not status_path:
-                raise APIError("Invalid response structure from status check")
-                
-            message_group = status_path[0].get("message_group", {})
-            status_obj = message_group.get("status", {})
-            status_str = status_obj.get("status", "UNKNOWN")
+            return self._parse_query_result(result)
             
-            # Map string status to enum
-            try:
-                status = QueryStatus(status_str)
-            except ValueError:
-                logger.warning(f"Unknown status received: {status_str}")
-                status = QueryStatus.UNKNOWN
-            
-            query_result = QueryResult(status=status, raw_response=result)
-            
-            if status == QueryStatus.FAILED:
-                query_result.error = status_obj.get("error", "Unknown error")
-            elif status == QueryStatus.DONE:
-                # Extract response data - ACE API has a complex message structure
-                messages = message_group.get("messages", {})
-                
-                # Look for the final response message (usually UserDataReference type)
-                text_responses = []
-                data_messages = []
-                
-                logger.debug(f"Processing {len(messages)} messages for extraction")
-                
-                for msg_id, msg_data in messages.items():
-                    if isinstance(msg_data, dict):
-                        msg_type = msg_data.get('type', '')
-                        logger.debug(f"Message {msg_id}: type={msg_type}")
-                        
-                        # Collect reasoning/text from UserDataReference messages
-                        if msg_type == 'UserDataReference':
-                            logger.debug(f"Found UserDataReference message with keys: {list(msg_data.keys())}")
-                            
-                            if 'reasoning' in msg_data and msg_data['reasoning']:
-                                text_responses.append(msg_data['reasoning'])
-                                logger.debug(f"Added reasoning: {len(msg_data['reasoning'])} chars")
-                            if 'interpretation' in msg_data and msg_data['interpretation']:
-                                text_responses.append(msg_data['interpretation'])
-                                logger.debug(f"Added interpretation: {len(msg_data['interpretation'])} chars")
-                            if 'insight' in msg_data and msg_data['insight']:
-                                text_responses.append(msg_data['insight'])
-                                logger.debug(f"Added insight: {len(msg_data['insight'])} chars")
-                            
-                            # Store the entire data message for further processing
-                            data_messages.append(msg_data)
-                
-                # Combine text responses
-                query_result.text_response = '\n\n'.join(text_responses) if text_responses else ""
-                logger.debug(f"Combined text response: {len(query_result.text_response)} chars")
-                
-                # Extract data from the most recent UserDataReference message
-                if data_messages:
-                    latest_data_msg = max(data_messages, key=lambda x: x.get('creation_date_unix_milli', 0))
-                    query_result.preview_data = latest_data_msg.get('preview_array')
-                    query_result.signed_urls = latest_data_msg.get('signed_urls')
-                    
-                    logger.debug(f"Preview data: {query_result.preview_data}")
-                    logger.debug(f"Signed URLs: {bool(query_result.signed_urls)}")
-                    
-                    # Try to create DataFrame from preview data if available
-                    if query_result.preview_data:
-                        try:
-                            query_result.data_frame = pd.DataFrame(query_result.preview_data)
-                            logger.debug(f"Created DataFrame with shape: {query_result.data_frame.shape}")
-                        except Exception as e:
-                            logger.warning(f"Failed to create DataFrame from preview data: {e}")
-                
-                # Fallback: look for any text_response field (legacy format)
-                if not query_result.text_response:
-                    for msg_data in messages.values():
-                        if isinstance(msg_data, dict) and msg_data.get('text_response'):
-                            query_result.text_response = msg_data['text_response'].strip()
-                            logger.debug("Used fallback text_response extraction")
-                            break
-            
-            return query_result
-            
+        except (APIError, GeotabACEError):
+            raise
         except Exception as e:
-            if isinstance(e, (APIError, GeotabACEError)):
-                raise
             raise APIError(f"Unexpected error checking query status: {e}")
+    
+    def _parse_query_result(self, api_response: Dict) -> QueryResult:
+        """Parse API response into QueryResult object."""
+        results = api_response.get("result", {}).get("apiResult", {}).get("results", [])
+        if not results:
+            raise APIError("Invalid response structure from status check")
+            
+        message_group = results[0].get("message_group", {})
+        status_obj = message_group.get("status", {})
+        status_str = status_obj.get("status", "UNKNOWN")
+        
+        # Map string status to enum
+        try:
+            status = QueryStatus(status_str)
+        except ValueError:
+            logger.warning(f"Unknown status received: {status_str}")
+            status = QueryStatus.UNKNOWN
+        
+        query_result = QueryResult(status=status, raw_response=api_response)
+        
+        if status == QueryStatus.FAILED:
+            query_result.error = status_obj.get("error", "Unknown error")
+        elif status == QueryStatus.DONE:
+            self._extract_response_data(message_group, query_result)
+        
+        return query_result
+    
+    def _extract_response_data(self, message_group: Dict, query_result: QueryResult) -> None:
+        """Extract text responses and data from completed query messages."""
+        messages = message_group.get("messages", {})
+        text_responses = []
+        data_messages = []
+        
+        logger.debug(f"Processing {len(messages)} messages for extraction")
+        
+        for msg_id, msg_data in messages.items():
+            if not isinstance(msg_data, dict):
+                continue
+                
+            msg_type = msg_data.get('type', '')
+            logger.debug(f"Message {msg_id}: type={msg_type}")
+            
+            # Collect reasoning/text from UserDataReference messages
+            if msg_type == 'UserDataReference':
+                self._extract_text_content(msg_data, text_responses)
+                data_messages.append(msg_data)
+        
+        # Combine text responses
+        query_result.text_response = '\n\n'.join(text_responses) if text_responses else ""
+        
+        # Extract data from the most recent UserDataReference message
+        if data_messages:
+            latest_data_msg = max(data_messages, key=lambda x: x.get('creation_date_unix_milli', 0))
+            query_result.preview_data = latest_data_msg.get('preview_array')
+            query_result.signed_urls = latest_data_msg.get('signed_urls')
+            
+            # Create DataFrame from preview data
+            self._create_dataframe(query_result)
+        
+        # Fallback: look for legacy text_response field
+        if not query_result.text_response:
+            self._extract_legacy_text_response(messages, query_result)
+    
+    def _extract_text_content(self, msg_data: Dict, text_responses: List[str]) -> None:
+        """Extract text content from UserDataReference message."""
+        text_fields = ['reasoning', 'interpretation', 'insight']
+        
+        for field in text_fields:
+            content = msg_data.get(field)
+            if content and content.strip():
+                text_responses.append(content)
+                logger.debug(f"Added {field}: {len(content)} chars")
+    
+    def _create_dataframe(self, query_result: QueryResult) -> None:
+        """Create DataFrame from preview data if available."""
+        if query_result.preview_data:
+            try:
+                query_result.data_frame = pd.DataFrame(query_result.preview_data)
+                logger.debug(f"Created DataFrame with shape: {query_result.data_frame.shape}")
+            except Exception as e:
+                logger.warning(f"Failed to create DataFrame from preview data: {e}")
+    
+    def _extract_legacy_text_response(self, messages: Dict, query_result: QueryResult) -> None:
+        """Extract text response from legacy message format."""
+        for msg_data in messages.values():
+            if isinstance(msg_data, dict) and msg_data.get('text_response'):
+                query_result.text_response = msg_data['text_response'].strip()
+                logger.debug("Used fallback text_response extraction")
+                break
     
     async def wait_for_completion(self, chat_id: str, message_group_id: str, 
                                   max_wait_seconds: int = 300, 
@@ -436,25 +466,21 @@ class GeotabACEClient:
                 
                 logger.debug(f"Query status: {result.status.value} (elapsed: {elapsed:.1f}s)")
                 
-                if result.status == QueryStatus.DONE:
-                    logger.info(f"✅ Query completed after {elapsed:.1f} seconds")
+                if result.status in [QueryStatus.DONE, QueryStatus.FAILED]:
+                    if result.status == QueryStatus.DONE:
+                        logger.info(f"Query completed after {elapsed:.1f} seconds")
+                    else:
+                        logger.error(f"Query failed after {elapsed:.1f} seconds: {result.error}")
                     return result
-                elif result.status == QueryStatus.FAILED:
-                    logger.error(f"Query failed after {elapsed:.1f} seconds: {result.error}")
-                    return result
-                elif result.status in [QueryStatus.PROCESSING, QueryStatus.PENDING]:
-                    # Log progress every 30 seconds
-                    if int(elapsed) % 30 == 0 and elapsed > 0:
-                        logger.info(f"Still processing... ({elapsed:.0f}s elapsed)")
                     
-                    # Progressive delay - start fast, then slow down
-                    if elapsed > 20:  # After 20 seconds, slow down
-                        poll_interval = min(5.0, poll_interval * 1.1)
-                    elif elapsed > 10:  # After 10 seconds, medium speed
-                        poll_interval = min(3.0, poll_interval * 1.05)
+                # Update polling strategy based on elapsed time
+                poll_interval = self._calculate_poll_interval(elapsed, poll_interval)
                 
-                # Reset error counter on successful call
-                consecutive_errors = 0
+                # Log progress periodically
+                if int(elapsed) % 30 == 0 and elapsed > 0:
+                    logger.info(f"Still processing... ({elapsed:.0f}s elapsed)")
+                
+                consecutive_errors = 0  # Reset error counter on success
                 
             except APIError as e:
                 consecutive_errors += 1
@@ -481,6 +507,15 @@ class GeotabACEClient:
         elapsed = time.time() - start_time
         raise TimeoutError(f"Query did not complete within {max_wait_seconds} seconds (elapsed: {elapsed:.1f}s)")
     
+    def _calculate_poll_interval(self, elapsed: float, current_interval: float) -> float:
+        """Calculate next polling interval based on elapsed time."""
+        if elapsed > 20:  # After 20 seconds, slow down
+            return min(5.0, current_interval * 1.1)
+        elif elapsed > 10:  # After 10 seconds, medium speed
+            return min(3.0, current_interval * 1.05)
+        else:
+            return current_interval
+    
     async def get_full_dataset(self, query_result: QueryResult) -> Optional[pd.DataFrame]:
         """
         Download the full dataset from signed URLs if available.
@@ -493,15 +528,18 @@ class GeotabACEClient:
         """
         if not query_result.signed_urls:
             logger.debug("No signed URLs available for full dataset")
-            return query_result.data_frame  # Return preview data if available
+            return query_result.data_frame
         
         try:
             logger.debug("Downloading full dataset from signed URL")
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=120)) as session:
+            timeout = aiohttp.ClientTimeout(total=120)
+            
+            async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.get(query_result.signed_urls[0]) as response:
                     response.raise_for_status()
                     csv_content = await response.text()
                     return pd.read_csv(StringIO(csv_content))
+                    
         except Exception as e:
             logger.warning(f"Failed to download full dataset: {e}")
             return query_result.data_frame  # Fallback to preview data
@@ -520,6 +558,7 @@ class GeotabACEClient:
         Raises:
             TimeoutError: If query doesn't complete within max_wait_seconds
             APIError: If the query fails
+            ValueError: If question is invalid
         """
         chat_id, message_group_id = await self.start_query(question)
         return await self.wait_for_completion(chat_id, message_group_id, max_wait_seconds)
@@ -529,13 +568,14 @@ class GeotabACEClient:
         Test the connection and authentication.
         
         Returns:
-            Dictionary with test results
+            Dictionary with test results including success/failure status
         """
         result = {
             "config_valid": False,
             "auth_successful": False,
             "api_working": False,
-            "errors": []
+            "errors": [],
+            "database": self.credentials.database
         }
         
         try:
@@ -548,7 +588,7 @@ class GeotabACEClient:
             result["session_id"] = credentials.get("sessionId", "Unknown")[:20] + "..."
             
             # Test API call
-            await self._make_api_call("create-chat", {}, timeout_seconds=30)
+            await self._make_api_call("create-chat", {})
             result["api_working"] = True
             
         except AuthenticationError as e:
@@ -559,6 +599,7 @@ class GeotabACEClient:
             result["errors"].append(f"Unexpected error: {e}")
             
         return result
+
 
 # Convenience functions for simple usage
 async def ask_question_simple(question: str, max_wait_seconds: int = 300) -> QueryResult:
@@ -575,6 +616,7 @@ async def ask_question_simple(question: str, max_wait_seconds: int = 300) -> Que
     client = GeotabACEClient()
     return await client.ask_question(question, max_wait_seconds)
 
+
 async def test_connection_simple() -> Dict[str, Any]:
     """
     Simple function to test connection using environment variables.
@@ -585,26 +627,41 @@ async def test_connection_simple() -> Dict[str, Any]:
     client = GeotabACEClient()
     return await client.test_connection()
 
+
 # Command line interface for testing
 if __name__ == "__main__":
     import argparse
+    import sys
     
-    async def main():
+    def configure_logging(verbose: bool = False) -> None:
+        """Configure logging for CLI usage."""
+        level = logging.DEBUG if verbose else logging.INFO
+        logging.basicConfig(
+            level=level,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
+    
+    def print_data_preview(df: pd.DataFrame, max_rows: int = 10) -> None:
+        """Print a nicely formatted data preview."""
+        preview_rows = min(max_rows, len(df))
+        print(f"\nData shape: {df.shape}")
+        print("\nData preview:")
+        print(df.head(preview_rows).to_string(index=False))
+        
+        if len(df) > preview_rows:
+            print(f"\n... and {len(df) - preview_rows} more rows")
+    
+    async def run_cli():
+        """Run the command line interface."""
         parser = argparse.ArgumentParser(description="Geotab ACE Utility")
         parser.add_argument("--test", action="store_true", help="Test connection")
         parser.add_argument("--question", type=str, help="Ask a question")
         parser.add_argument("--timeout", type=int, default=300, help="Timeout in seconds")
         parser.add_argument("--verbose", action="store_true", help="Enable verbose logging")
-        parser.add_argument("--dump-response", action="store_true", help="Dump full raw response")
         
         args = parser.parse_args()
         
-        # Configure logging
-        level = logging.DEBUG if args.verbose else logging.INFO
-        logging.basicConfig(
-            level=level,
-            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        )
+        configure_logging(args.verbose)
         
         try:
             if args.test:
@@ -620,6 +677,7 @@ if __name__ == "__main__":
                 
                 if result.error:
                     print(f"Error: {result.error}")
+                    return
                     
                 if result.text_response:
                     print(f"\nResponse:\n{result.text_response}")
@@ -627,62 +685,20 @@ if __name__ == "__main__":
                     print("\nNo text response received.")
                     
                 if result.data_frame is not None:
-                    print(f"\nData shape: {result.data_frame.shape}")
-                    print("\nData preview:")
-                    print(result.data_frame.head(10).to_string(index=False))
-                    
-                    if len(result.data_frame) > 10:
-                        print(f"\n... and {len(result.data_frame) - 10} more rows")
+                    print_data_preview(result.data_frame)
                 else:
                     print("\nNo data returned.")
-                    
-                # Debug: Show raw response structure
-                if args.verbose and result.raw_response:
-                    print(f"\nDEBUG: Raw response structure:")
-                    print(f"Top level keys: {list(result.raw_response.keys())}")
-                    
-                    if 'result' in result.raw_response:
-                        result_data = result.raw_response['result']
-                        print(f"Result keys: {list(result_data.keys()) if isinstance(result_data, dict) else 'Not a dict'}")
-                        
-                        if isinstance(result_data, dict) and 'apiResult' in result_data:
-                            api_result = result_data['apiResult']
-                            print(f"API Result keys: {list(api_result.keys()) if isinstance(api_result, dict) else 'Not a dict'}")
-                            
-                            if isinstance(api_result, dict) and 'results' in api_result:
-                                results = api_result['results']
-                                print(f"Results type: {type(results)}")
-                                if isinstance(results, list) and len(results) > 0:
-                                    first_result = results[0]
-                                    print(f"First result keys: {list(first_result.keys()) if isinstance(first_result, dict) else 'Not a dict'}")
-                                    
-                                    if isinstance(first_result, dict) and 'message_group' in first_result:
-                                        msg_group = first_result['message_group']
-                                        print(f"Message group keys: {list(msg_group.keys()) if isinstance(msg_group, dict) else 'Not a dict'}")
-                                        
-                                        if isinstance(msg_group, dict) and 'messages' in msg_group:
-                                            messages = msg_group['messages']
-                                            print(f"Messages keys: {list(messages.keys()) if isinstance(messages, dict) else 'Not a dict'}")
-                                            print(f"Messages content: {messages}")
-                                        else:
-                                            print("No 'messages' in message_group")
-                                    else:
-                                        print("No 'message_group' in first result")
-                                else:
-                                    print(f"Results is empty or not a list: {results}")
-                            else:
-                                print("No 'results' in apiResult")
-                        else:
-                            print("No 'apiResult' in result")
-                    else:
-                        print("No 'result' in raw response")
                     
             else:
                 parser.print_help()
                 
+        except KeyboardInterrupt:
+            print("\nOperation cancelled by user")
         except Exception as e:
             print(f"Error: {e}")
             if args.verbose:
+                import traceback
                 traceback.print_exc()
+            sys.exit(1)
     
-    asyncio.run(main())
+    asyncio.run(run_cli())
