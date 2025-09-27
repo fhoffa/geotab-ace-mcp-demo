@@ -54,6 +54,15 @@ class QueryResult:
     signed_urls: Optional[List[str]] = None
     error: Optional[str] = None
     raw_response: Optional[Dict] = None
+    # Enhanced fields for better data extraction
+    sql_query: Optional[str] = None
+    reasoning: Optional[str] = None
+    interpretation: Optional[str] = None
+    insight: Optional[str] = None
+    process: Optional[str] = None
+    understanding: Optional[str] = None
+    analysis: Optional[str] = None
+    all_messages: Optional[Dict] = None
 
 
 class GeotabACEError(Exception):
@@ -343,7 +352,7 @@ class GeotabACEClient:
             raise APIError(f"Unexpected error checking query status: {e}")
     
     def _parse_query_result(self, api_response: Dict) -> QueryResult:
-        """Parse API response into QueryResult object."""
+        """Parse API response into QueryResult object with enhanced data extraction."""
         results = api_response.get("result", {}).get("apiResult", {}).get("results", [])
         if not results:
             raise APIError("Invalid response structure from status check")
@@ -364,55 +373,51 @@ class GeotabACEClient:
         if status == QueryStatus.FAILED:
             query_result.error = status_obj.get("error", "Unknown error")
         elif status == QueryStatus.DONE:
-            self._extract_response_data(message_group, query_result)
+            self._extract_enhanced_response_data(message_group, query_result)
         
         return query_result
     
-    def _extract_response_data(self, message_group: Dict, query_result: QueryResult) -> None:
-        """Extract text responses and data from completed query messages."""
+    def _extract_enhanced_response_data(self, message_group: Dict, query_result: QueryResult) -> None:
+        """Extract response data focusing on UserDataReference messages as per API docs."""
         messages = message_group.get("messages", {})
-        text_responses = []
-        data_messages = []
+        query_result.all_messages = messages
         
-        logger.debug(f"Processing {len(messages)} messages for extraction")
+        logger.debug(f"Processing {len(messages)} messages")
         
-        for msg_id, msg_data in messages.items():
-            if not isinstance(msg_data, dict):
-                continue
-                
-            msg_type = msg_data.get('type', '')
-            logger.debug(f"Message {msg_id}: type={msg_type}")
+        # Find the UserDataReference message (contains the main results)
+        user_data_msg = None
+        for msg_data in messages.values():
+            if isinstance(msg_data, dict) and msg_data.get('type') == 'UserDataReference':
+                user_data_msg = msg_data
+                break
+        
+        if user_data_msg:
+            # Extract SQL query from 'query' field
+            query_result.sql_query = user_data_msg.get('query')
             
-            # Collect reasoning/text from UserDataReference messages
-            if msg_type == 'UserDataReference':
-                self._extract_text_content(msg_data, text_responses)
-                data_messages.append(msg_data)
-        
-        # Combine text responses
-        query_result.text_response = '\n\n'.join(text_responses) if text_responses else ""
-        
-        # Extract data from the most recent UserDataReference message
-        if data_messages:
-            latest_data_msg = max(data_messages, key=lambda x: x.get('creation_date_unix_milli', 0))
-            query_result.preview_data = latest_data_msg.get('preview_array')
-            query_result.signed_urls = latest_data_msg.get('signed_urls')
+            # Extract reasoning from 'reasoning' field  
+            query_result.reasoning = user_data_msg.get('reasoning')
             
-            # Create DataFrame from preview data
+            # Extract interpretation from 'interpretation' field
+            query_result.interpretation = user_data_msg.get('interpretation')
+            
+            # Use reasoning as main text response if no other text
+            query_result.text_response = query_result.reasoning or ""
+            
+            # Extract data
+            query_result.preview_data = user_data_msg.get('preview_array')
+            query_result.signed_urls = user_data_msg.get('signed_urls')
+            
+            # Create DataFrame
             self._create_dataframe(query_result)
-        
-        # Fallback: look for legacy text_response field
-        if not query_result.text_response:
-            self._extract_legacy_text_response(messages, query_result)
+            
+            logger.debug(f"Extracted: SQL={bool(query_result.sql_query)}, "
+                        f"reasoning={bool(query_result.reasoning)}, "
+                        f"data={bool(query_result.preview_data)}")
+        else:
+            logger.warning("No UserDataReference message found")
     
-    def _extract_text_content(self, msg_data: Dict, text_responses: List[str]) -> None:
-        """Extract text content from UserDataReference message."""
-        text_fields = ['reasoning', 'interpretation', 'insight']
-        
-        for field in text_fields:
-            content = msg_data.get(field)
-            if content and content.strip():
-                text_responses.append(content)
-                logger.debug(f"Added {field}: {len(content)} chars")
+
     
     def _create_dataframe(self, query_result: QueryResult) -> None:
         """Create DataFrame from preview data if available."""
@@ -422,14 +427,6 @@ class GeotabACEClient:
                 logger.debug(f"Created DataFrame with shape: {query_result.data_frame.shape}")
             except Exception as e:
                 logger.warning(f"Failed to create DataFrame from preview data: {e}")
-    
-    def _extract_legacy_text_response(self, messages: Dict, query_result: QueryResult) -> None:
-        """Extract text response from legacy message format."""
-        for msg_data in messages.values():
-            if isinstance(msg_data, dict) and msg_data.get('text_response'):
-                query_result.text_response = msg_data['text_response'].strip()
-                logger.debug("Used fallback text_response extraction")
-                break
     
     async def wait_for_completion(self, chat_id: str, message_group_id: str, 
                                   max_wait_seconds: int = 300, 
@@ -678,6 +675,16 @@ if __name__ == "__main__":
                 if result.error:
                     print(f"Error: {result.error}")
                     return
+                
+                # Show SQL query if available
+                if result.sql_query:
+                    print(f"\nSQL Query:\n{result.sql_query}")
+                
+                # Show reasoning/analysis if available
+                if result.reasoning:
+                    print(f"\nReasoning:\n{result.reasoning}")
+                if result.interpretation:
+                    print(f"\nInterpretation:\n{result.interpretation}")
                     
                 if result.text_response:
                     print(f"\nResponse:\n{result.text_response}")

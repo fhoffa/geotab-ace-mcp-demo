@@ -43,44 +43,52 @@ def get_ace_client() -> GeotabACEClient:
 
 
 def format_query_result(result, chat_id: str = "", message_group_id: str = "") -> str:
-    """Format a QueryResult for display."""
+    """Format a QueryResult for display focusing on key information."""
     parts = []
     
     if result.status == QueryStatus.DONE:
-        if result.text_response:
-            parts.append(f"📝 **Answer**\n{result.text_response}")
-            
+        # Show SQL query first if available
+        if result.sql_query:
+            parts.append(f"**SQL Query:**\n```sql\n{result.sql_query}\n```")
+        
+        # Show reasoning 
+        if result.reasoning:
+            parts.append(f"**Analysis:**\n{result.reasoning}")
+        
+        # Show interpretation if different from reasoning
+        if result.interpretation and result.interpretation != result.reasoning:
+            parts.append(f"**Interpretation:**\n{result.interpretation}")
+
+        # Data results
         if result.data_frame is not None and not result.data_frame.empty:
             df = result.data_frame
-            preview_rows = min(15, len(df))
-            preview_table = df.head(preview_rows).to_string(index=False)
+            preview_rows = min(20, len(df))
+            preview_table = df.head(preview_rows).to_string(index=False, max_colwidth=40)
             
-            parts.append(f"📊 **Data Preview** (showing {preview_rows}/{len(df)} rows)\n```\n{preview_table}\n```")
-            
+            parts.append(f"**Data Results ({len(df)} rows):**")
+            parts.append(f"```\n{preview_table}\n```")
+
             if len(df) > preview_rows:
-                parts.append(f"📈 *Full dataset has {len(df)} rows and {len(df.columns)} columns*")
-                
+                parts.append(f"*Showing {preview_rows} of {len(df)} total rows*")
+
             if result.signed_urls:
-                parts.append("💾 *Full dataset available - use get_full_data to download complete CSV*")
-        
-        # If we have preview data but no DataFrame, show it directly
+                parts.append("*Full dataset available via signed URL*")
+
         elif result.preview_data:
-            parts.append(f"📊 **Data**\n```\n{result.preview_data}\n```")
-                
+            parts.append(f"**Data Preview:**\n```json\n{json.dumps(result.preview_data[:3], indent=2)}\n```")
+
         if not parts:
-            parts.append("Query completed successfully but no content returned.")
+            parts.append("Query completed but no results returned.")
             
     elif result.status == QueryStatus.FAILED:
-        parts.append(f"❌ **Query Failed**: {result.error or 'Unknown error'}")
+        parts.append(f"**Query Failed:** {result.error or 'Unknown error'}")
         
     elif result.status in [QueryStatus.PROCESSING, QueryStatus.PENDING]:
-        status_msg = f"🔄 **Query Status**: {result.status.value.title()}"
-        parts.append(f"{status_msg}\n\n⏳ Still processing... Check again in a few moments.")
-        
+        parts.append(f"**Status:** {result.status.value} - Still processing...")
         if chat_id and message_group_id:
-            parts.append(f"📋 **Tracking**: Chat ID `{chat_id}`, Message Group ID `{message_group_id}`")
+            parts.append(f"**Tracking:** Chat `{chat_id}`, Message Group `{message_group_id}`")
     else:
-        parts.append(f"❓ **Unknown Status**: {result.status.value}")
+        parts.append(f"**Unknown Status:** {result.status.value}")
         
     return "\n\n".join(parts)
 
@@ -95,7 +103,7 @@ async def geotab_ask_question(question: str, timeout_seconds: int = 60) -> str:
         timeout_seconds (int): Maximum time to wait for response (default: 60 seconds)
         
     Returns:
-        str: The response from Geotab AI, including any data and analysis
+        str: The response from Geotab AI, including SQL query, analysis, and data
     """
     try:
         if not question or not question.strip():
@@ -127,15 +135,15 @@ async def geotab_ask_question(question: str, timeout_seconds: int = 60) -> str:
         except TimeoutError:
             return f"""⏱️ Query is taking longer than {timeout_seconds} seconds to process.
 
-Question: {question[:100]}{'...' if len(question) > 100 else ''}
+❓ **Question**: {question[:200]}{'...' if len(question) > 200 else ''}
 
 📋 **Tracking Information**:
 • Chat ID: `{chat_id}`  
 • Message Group ID: `{message_group_id}`
 
 🔄 **Next Steps**:
-Use `geotab_check_status('{chat_id}', '{message_group_id}')` to check progress
-Use `geotab_get_results('{chat_id}', '{message_group_id}')` to get results when ready"""
+• Use `geotab_check_status('{chat_id}', '{message_group_id}')` to check progress
+• Use `geotab_get_results('{chat_id}', '{message_group_id}')` to get results when ready"""
             
     except AuthenticationError as e:
         logger.error(f"Authentication error: {e}")
@@ -159,7 +167,7 @@ async def geotab_check_status(chat_id: str, message_group_id: str) -> str:
         message_group_id (str): Message group ID from a previous question
         
     Returns:
-        str: Current status of the query
+        str: Current status of the query with any available partial results
     """
     try:
         if not chat_id or not message_group_id:
@@ -173,7 +181,7 @@ async def geotab_check_status(chat_id: str, message_group_id: str) -> str:
         response = format_query_result(result, chat_id, message_group_id)
         
         if result.status == QueryStatus.DONE:
-            response += f"\n\n🎯 **Get Full Results**: `geotab_get_results('{chat_id}', '{message_group_id}')`"
+            response += f"\n\n🎯 **Get Full Results**: Use `geotab_get_results('{chat_id}', '{message_group_id}')` for complete data"
             
         return response
         
@@ -198,13 +206,13 @@ async def geotab_get_results(chat_id: str, message_group_id: str, include_full_d
         include_full_data (bool): Whether to download the full dataset (default: True)
         
     Returns:
-        str: Complete results including analysis and full dataset
+        str: Complete results including SQL query, analysis, and full dataset
     """
     try:
         if not chat_id or not message_group_id:
             return "❌ Error: Both chat_id and message_group_id are required"
             
-        logger.info(f"Getting results for {chat_id}/{message_group_id}")
+        logger.info(f"Getting results for {chat_id}/{message_group_id} (full_data={include_full_data})")
         
         client = get_ace_client()
         result = await client.get_query_status(chat_id, message_group_id)
@@ -214,7 +222,7 @@ async def geotab_get_results(chat_id: str, message_group_id: str, include_full_d
                 return f"❌ **Query Failed**: {result.error or 'Unknown error'}"
             else:
                 return f"🔄 **Query Not Ready**: Status is {result.status.value}. Please wait and try again."
-        
+            
         # Get full dataset if requested and available
         if include_full_data and result.signed_urls:
             try:
@@ -228,17 +236,39 @@ async def geotab_get_results(chat_id: str, message_group_id: str, include_full_d
         
         parts = []
         
-        # Add text analysis
-        if result.text_response:
-            parts.append(f"📝 **Analysis**\n{result.text_response}")
+        # Add SQL query first
+        if result.sql_query:
+            parts.append(f"🗄️ **SQL Query**\n```sql\n{result.sql_query}\n```")
         
-        # Add dataset
+        # Add all available analysis
+        analysis_parts = []
+        if result.reasoning:
+            analysis_parts.append(f"**Reasoning**: {result.reasoning}")
+        if result.analysis:
+            analysis_parts.append(f"**Analysis**: {result.analysis}")
+        if result.interpretation:
+            analysis_parts.append(f"**Interpretation**: {result.interpretation}")
+        if result.insight:
+            analysis_parts.append(f"**Insight**: {result.insight}")
+        if result.understanding:
+            analysis_parts.append(f"**Understanding**: {result.understanding}")
+        if result.process:
+            analysis_parts.append(f"**Process**: {result.process}")
+        
+        if analysis_parts:
+            parts.append(f"🧠 **AI Analysis**\n{chr(10).join(analysis_parts)}")
+        
+        # Add main text response
+        if result.text_response:
+            parts.append(f"📝 **Summary**\n{result.text_response}")
+        
+        # Add comprehensive dataset information
         if result.data_frame is not None and not result.data_frame.empty:
             df = result.data_frame
             
-            # Show more data for full results
-            preview_rows = min(50, len(df))
-            preview_table = df.head(preview_rows).to_string(index=False)
+            # Determine how much data to show
+            preview_rows = min(100 if include_full_data else 50, len(df))
+            preview_table = df.head(preview_rows).to_string(index=False, max_colwidth=40)
             
             data_source = "complete dataset" if result.signed_urls and include_full_data else "preview data"
             dataset_info = f"📊 **Dataset** ({data_source}: {len(df)} rows × {len(df.columns)} columns)"
@@ -248,9 +278,23 @@ async def geotab_get_results(chat_id: str, message_group_id: str, include_full_d
             else:
                 parts.append(f"{dataset_info}\n```\n{preview_table}\n\n... and {len(df) - preview_rows} more rows\n```")
             
-            # Add column info for large datasets
-            if len(df.columns) > 5:
-                parts.append(f"📋 **Columns**: {', '.join(df.columns.astype(str))}")
+            # Add column information for datasets with many columns
+            if len(df.columns) > 10:
+                parts.append(f"📋 **All Columns**: {', '.join(df.columns.astype(str))}")
+                
+            # Add basic statistics for numeric columns
+            numeric_cols = df.select_dtypes(include=['number']).columns
+            if len(numeric_cols) > 0 and len(numeric_cols) <= 5:
+                stats_info = []
+                for col in numeric_cols:
+                    try:
+                        total = df[col].sum()
+                        avg = df[col].mean()
+                        stats_info.append(f"{col}: Total={total:,.0f}, Avg={avg:.1f}")
+                    except:
+                        continue
+                if stats_info:
+                    parts.append(f"📊 **Quick Stats**: {'; '.join(stats_info)}")
         
         if not parts:
             parts.append("✅ Query completed successfully but no data or analysis returned.")
@@ -293,7 +337,7 @@ async def geotab_start_query_async(question: str) -> str:
         
         return f"""🚀 **Query Started Successfully**
 
-📋 **Question**: {question[:200]}{'...' if len(question) > 200 else ''}
+❓ **Question**: {question[:300]}{'...' if len(question) > 300 else ''}
 
 🆔 **Tracking Information**:
 • Chat ID: `{chat_id}`
@@ -303,7 +347,7 @@ async def geotab_start_query_async(question: str) -> str:
 1. **Check Status**: `geotab_check_status('{chat_id}', '{message_group_id}')`
 2. **Get Results**: `geotab_get_results('{chat_id}', '{message_group_id}')` (when ready)
 
-⏱️ **Expected Processing Time**: 1-5 minutes for complex queries"""
+⏱️ **Expected Processing Time**: 30 seconds to 5 minutes depending on query complexity"""
         
     except AuthenticationError as e:
         return f"🔐 **Authentication Error**: {e}"
@@ -342,36 +386,38 @@ async def geotab_test_connection() -> str:
         if test_result["auth_successful"]:
             session_info = test_result.get("session_id", "Unknown")
             parts.append(f"✅ **Authentication**: Successful")
-            parts.append(f"📋 **Session ID**: {session_info}")
+            parts.append(f"📋 **Database**: {test_result.get('database', 'Unknown')}")
+            parts.append(f"🔑 **Session ID**: {session_info}")
         else:
             parts.append("❌ **Authentication**: Failed")
         
         # API check
         if test_result["api_working"]:
-            parts.append("✅ **API Calls**: Working")
+            parts.append("✅ **API Calls**: Working properly")
         else:
             parts.append("❌ **API Calls**: Failed")
         
         # Overall status
         all_good = test_result["config_valid"] and test_result["auth_successful"] and test_result["api_working"]
         if all_good:
-            parts.append("\n🎉 **Overall Status**: All systems operational!")
+            parts.append("\n🎉 **Overall Status**: All systems operational! Ready to process queries.")
         else:
-            parts.append("\n⚠️ **Overall Status**: Issues detected")
+            parts.append("\n⚠️ **Overall Status**: Issues detected - see troubleshooting below")
         
-        # Errors
+        # Errors and troubleshooting
         if test_result["errors"]:
-            parts.append("\n🚨 **Errors**:")
+            parts.append("\n🚨 **Errors Detected**:")
             for error in test_result["errors"]:
                 parts.append(f"• {error}")
                 
-            parts.append("\n🛠️ **Troubleshooting**:")
-            parts.append("1. Verify environment variables are set correctly:")
-            parts.append("   - GEOTAB_API_USERNAME")
-            parts.append("   - GEOTAB_API_PASSWORD") 
-            parts.append("   - GEOTAB_API_DATABASE")
-            parts.append("2. Check your Geotab account has API access")
-            parts.append("3. Verify network connectivity")
+            parts.append("\n🛠️ **Troubleshooting Steps**:")
+            parts.append("1. **Environment Variables**: Verify these are set correctly:")
+            parts.append("   • `GEOTAB_API_USERNAME` - Your Geotab username")
+            parts.append("   • `GEOTAB_API_PASSWORD` - Your Geotab password") 
+            parts.append("   • `GEOTAB_API_DATABASE` - Your Geotab database name")
+            parts.append("2. **Account Access**: Ensure your Geotab account has API access permissions")
+            parts.append("3. **Network**: Check internet connectivity and firewall settings")
+            parts.append("4. **Credentials**: Verify username/password work in Geotab web interface")
         
         return "\n".join(parts)
         
@@ -380,30 +426,38 @@ async def geotab_test_connection() -> str:
         logger.error(traceback.format_exc())
         return f"""💥 **Connection Test Failed**
 
-Error: {str(e)}
+🚨 **Error**: {str(e)}
 
-🛠️ **Setup Instructions**:
-1. Create a `.env` file with:
-```
+🛠️ **Quick Setup Guide**:
+1. Create a `.env` file in your project directory:
+```env
 GEOTAB_API_USERNAME=your_username
 GEOTAB_API_PASSWORD=your_password
 GEOTAB_API_DATABASE=your_database
 ```
-2. Restart the MCP server
-3. Check server logs for detailed error information"""
+
+2. Or set environment variables in your system:
+```bash
+export GEOTAB_API_USERNAME="your_username"
+export GEOTAB_API_PASSWORD="your_password" 
+export GEOTAB_API_DATABASE="your_database"
+```
+
+3. Restart the MCP server after setting variables
+4. Check server logs for detailed error information"""
 
 
 @mcp.tool()
 async def geotab_debug_query(chat_id: str, message_group_id: str) -> str:
     """
-    Debug function to see raw response data from a query.
+    Debug function to see raw response data and detailed extraction info from a query.
     
     Args:
         chat_id (str): Chat ID from a previous question
         message_group_id (str): Message group ID from a previous question
         
     Returns:
-        str: Raw debug information about the query response
+        str: Raw debug information about the query response and data extraction
     """
     try:
         if not chat_id or not message_group_id:
@@ -415,19 +469,44 @@ async def geotab_debug_query(chat_id: str, message_group_id: str) -> str:
         result = await client.get_query_status(chat_id, message_group_id)
         
         debug_info = []
+        debug_info.append(f"🔍 **Debug Information for Query {message_group_id}**")
         debug_info.append(f"**Status**: {result.status.value}")
+        
+        # Basic field information
         debug_info.append(f"**Has text_response**: {bool(result.text_response)} (length: {len(result.text_response) if result.text_response else 0})")
+        debug_info.append(f"**Has sql_query**: {bool(result.sql_query)} (length: {len(result.sql_query) if result.sql_query else 0})")
+        debug_info.append(f"**Has reasoning**: {bool(result.reasoning)} (length: {len(result.reasoning) if result.reasoning else 0})")
+        debug_info.append(f"**Has analysis**: {bool(result.analysis)} (length: {len(result.analysis) if result.analysis else 0})")
+        debug_info.append(f"**Has interpretation**: {bool(result.interpretation)} (length: {len(result.interpretation) if result.interpretation else 0})")
         debug_info.append(f"**Has data_frame**: {result.data_frame is not None}")
+        
         if result.data_frame is not None:
             debug_info.append(f"**Data shape**: {result.data_frame.shape}")
-        debug_info.append(f"**Has preview_data**: {bool(result.preview_data)}")
-        if result.preview_data:
-            debug_info.append(f"**Preview data**: {result.preview_data}")
-        debug_info.append(f"**Has signed_urls**: {bool(result.signed_urls)}")
+            debug_info.append(f"**Data columns**: {list(result.data_frame.columns)}")
+            
+        debug_info.append(f"**Has preview_data**: {bool(result.preview_data)} (items: {len(result.preview_data) if result.preview_data else 0})")
+        debug_info.append(f"**Has signed_urls**: {bool(result.signed_urls)} (count: {len(result.signed_urls) if result.signed_urls else 0})")
         debug_info.append(f"**Has error**: {bool(result.error)}")
         
+        # Show actual content previews
+        if result.sql_query:
+            debug_info.append(f"**SQL Query Preview**: {result.sql_query[:200]}{'...' if len(result.sql_query) > 200 else ''}")
+            
         if result.text_response:
-            debug_info.append(f"**Text Response Preview**: {result.text_response[:200]}...")
+            debug_info.append(f"**Text Response Preview**: {result.text_response[:200]}{'...' if len(result.text_response) > 200 else ''}")
+            
+        if result.reasoning:
+            debug_info.append(f"**Reasoning Preview**: {result.reasoning[:200]}{'...' if len(result.reasoning) > 200 else ''}")
+        
+        # Message structure information
+        if hasattr(result, 'all_messages') and result.all_messages:
+            debug_info.append(f"**Raw Messages Count**: {len(result.all_messages)}")
+            msg_types = {}
+            for msg_id, msg_data in result.all_messages.items():
+                if isinstance(msg_data, dict):
+                    msg_type = msg_data.get('type', 'unknown')
+                    msg_types[msg_type] = msg_types.get(msg_type, 0) + 1
+            debug_info.append(f"**Message Types**: {dict(msg_types)}")
             
         return "\n".join(debug_info)
         
@@ -438,13 +517,21 @@ async def geotab_debug_query(chat_id: str, message_group_id: str) -> str:
 
 @mcp.resource("geotab://status")
 def get_server_status():
-    """Get current server status."""
+    """Get current server status and capability information."""
     try:
         global ace_client
         return {
             "server": "geotab-mcp-server",
+            "version": "2.0-enhanced",
             "status": "running",
             "client_initialized": ace_client is not None,
+            "features": [
+                "SQL query extraction",
+                "Enhanced reasoning capture", 
+                "Full dataset download",
+                "Async query processing",
+                "Comprehensive debugging"
+            ],
             "tools_available": [
                 "geotab_ask_question",
                 "geotab_check_status", 
@@ -465,7 +552,7 @@ def get_server_status():
 def main():
     """Main function to run the MCP server."""
     try:
-        logger.info("Starting Geotab MCP Server...")
+        logger.info("Starting Enhanced Geotab MCP Server...")
         logger.info(f"Python version: {sys.version}")
         
         # Test if we can create a client (this will validate env vars)
@@ -479,7 +566,7 @@ def main():
             logger.error(f"❌ Unexpected error during client initialization: {e}")
         
         # Run the MCP server
-        logger.info("🚀 MCP Server starting...")
+        logger.info("🚀 Enhanced MCP Server starting with SQL extraction and full data support...")
         mcp.run()
         
     except KeyboardInterrupt:
