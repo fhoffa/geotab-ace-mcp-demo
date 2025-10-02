@@ -462,52 +462,19 @@ async def geotab_debug_query(chat_id: str, message_group_id: str) -> str:
     try:
         if not chat_id or not message_group_id:
             return "❌ Error: Both chat_id and message_group_id are required"
-            
+
         logger.info(f"Debug query for {chat_id}/{message_group_id}")
-        
+
         client = get_ace_client()
         result = await client.get_query_status(chat_id, message_group_id)
-        
+
+        # Return the full raw API response as formatted JSON
         debug_info = []
-        debug_info.append(f"🔍 **Debug Information for Query {message_group_id}**")
-        debug_info.append(f"**Status**: {result.status.value}")
-        
-        # Basic field information
-        debug_info.append(f"**Has text_response**: {bool(result.text_response)} (length: {len(result.text_response) if result.text_response else 0})")
-        debug_info.append(f"**Has sql_query**: {bool(result.sql_query)} (length: {len(result.sql_query) if result.sql_query else 0})")
-        debug_info.append(f"**Has reasoning**: {bool(result.reasoning)} (length: {len(result.reasoning) if result.reasoning else 0})")
-        debug_info.append(f"**Has analysis**: {bool(result.analysis)} (length: {len(result.analysis) if result.analysis else 0})")
-        debug_info.append(f"**Has interpretation**: {bool(result.interpretation)} (length: {len(result.interpretation) if result.interpretation else 0})")
-        debug_info.append(f"**Has data_frame**: {result.data_frame is not None}")
-        
-        if result.data_frame is not None:
-            debug_info.append(f"**Data shape**: {result.data_frame.shape}")
-            debug_info.append(f"**Data columns**: {list(result.data_frame.columns)}")
-            
-        debug_info.append(f"**Has preview_data**: {bool(result.preview_data)} (items: {len(result.preview_data) if result.preview_data else 0})")
-        debug_info.append(f"**Has signed_urls**: {bool(result.signed_urls)} (count: {len(result.signed_urls) if result.signed_urls else 0})")
-        debug_info.append(f"**Has error**: {bool(result.error)}")
-        
-        # Show actual content previews
-        if result.sql_query:
-            debug_info.append(f"**SQL Query Preview**: {result.sql_query[:200]}{'...' if len(result.sql_query) > 200 else ''}")
-            
-        if result.text_response:
-            debug_info.append(f"**Text Response Preview**: {result.text_response[:200]}{'...' if len(result.text_response) > 200 else ''}")
-            
-        if result.reasoning:
-            debug_info.append(f"**Reasoning Preview**: {result.reasoning[:200]}{'...' if len(result.reasoning) > 200 else ''}")
-        
-        # Message structure information
-        if hasattr(result, 'all_messages') and result.all_messages:
-            debug_info.append(f"**Raw Messages Count**: {len(result.all_messages)}")
-            msg_types = {}
-            for msg_id, msg_data in result.all_messages.items():
-                if isinstance(msg_data, dict):
-                    msg_type = msg_data.get('type', 'unknown')
-                    msg_types[msg_type] = msg_types.get(msg_type, 0) + 1
-            debug_info.append(f"**Message Types**: {dict(msg_types)}")
-            
+        debug_info.append(f"🔍 **Raw API Response for Query {message_group_id}**\n")
+        debug_info.append(f"**Status**: {result.status.value}\n")
+        debug_info.append("**Full Response**:")
+        debug_info.append(f"```json\n{json.dumps(result.raw_response, indent=2)}\n```")
+
         return "\n".join(debug_info)
         
     except Exception as e:

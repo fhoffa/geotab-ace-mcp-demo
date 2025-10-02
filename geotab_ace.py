@@ -378,44 +378,54 @@ class GeotabACEClient:
         return query_result
     
     def _extract_enhanced_response_data(self, message_group: Dict, query_result: QueryResult) -> None:
-        """Extract response data focusing on UserDataReference messages as per API docs."""
+        """Extract response data from UserDataReference or AssistantMessage."""
         messages = message_group.get("messages", {})
         query_result.all_messages = messages
-        
+
         logger.debug(f"Processing {len(messages)} messages")
-        
-        # Find the UserDataReference message (contains the main results)
+
+        # Find the UserDataReference message (contains SQL query results)
         user_data_msg = None
+        assistant_msg = None
+
         for msg_data in messages.values():
-            if isinstance(msg_data, dict) and msg_data.get('type') == 'UserDataReference':
-                user_data_msg = msg_data
-                break
-        
+            if isinstance(msg_data, dict):
+                msg_type = msg_data.get('type')
+                if msg_type == 'UserDataReference':
+                    user_data_msg = msg_data
+                elif msg_type == 'AssistantMessage':
+                    assistant_msg = msg_data
+
         if user_data_msg:
             # Extract SQL query from 'query' field
             query_result.sql_query = user_data_msg.get('query')
-            
-            # Extract reasoning from 'reasoning' field  
+
+            # Extract reasoning from 'reasoning' field
             query_result.reasoning = user_data_msg.get('reasoning')
-            
+
             # Extract interpretation from 'interpretation' field
             query_result.interpretation = user_data_msg.get('interpretation')
-            
+
             # Use reasoning as main text response if no other text
             query_result.text_response = query_result.reasoning or ""
-            
+
             # Extract data
             query_result.preview_data = user_data_msg.get('preview_array')
             query_result.signed_urls = user_data_msg.get('signed_urls')
-            
+
             # Create DataFrame
             self._create_dataframe(query_result)
-            
+
             logger.debug(f"Extracted: SQL={bool(query_result.sql_query)}, "
                         f"reasoning={bool(query_result.reasoning)}, "
                         f"data={bool(query_result.preview_data)}")
+        elif assistant_msg:
+            # For non-SQL queries, extract the assistant's text response
+            query_result.text_response = assistant_msg.get('content', '')
+            query_result.reasoning = query_result.text_response
+            logger.debug(f"Extracted AssistantMessage content (length: {len(query_result.text_response)})")
         else:
-            logger.warning("No UserDataReference message found")
+            logger.warning("No UserDataReference or AssistantMessage found")
     
 
     
