@@ -296,6 +296,10 @@ export GEOTAB_LOG_LEVEL=DEBUG
 
 Or modify the logging configuration in the code.
 
+## Roadmap
+
+See [docs/improvements.md](docs/improvements.md) for planned enhancements and future features. We welcome contributions and feedback on priorities!
+
 ## Support
 
 For issues with:
