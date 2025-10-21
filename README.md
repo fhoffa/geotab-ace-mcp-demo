@@ -29,6 +29,7 @@ Create a `.env` file in the project directory:
 GEOTAB_API_USERNAME=your_username
 GEOTAB_API_PASSWORD=your_password
 GEOTAB_API_DATABASE=your_database_name
+# GEOTAB_API_URL=https://alpha.geotab.com/apiv1  # Optional: for alpha.geotab.com access
 ```
 
 ### 3. Test the Connection
@@ -128,6 +129,7 @@ Test my Geotab connection
 | `GEOTAB_API_USERNAME` | Your Geotab username | Yes |
 | `GEOTAB_API_PASSWORD` | Your Geotab password | Yes |
 | `GEOTAB_API_DATABASE` | Your Geotab database name | Yes |
+| `GEOTAB_API_URL` | Geotab API endpoint URL (default: `https://my.geotab.com/apiv1`) | No |
 
 ### Alternative: System Environment Variables
 
@@ -293,6 +295,10 @@ export GEOTAB_LOG_LEVEL=DEBUG
 ```
 
 Or modify the logging configuration in the code.
+
+## Roadmap
+
+See [docs/improvements.md](docs/improvements.md) for planned enhancements and future features. We welcome contributions and feedback on priorities!
 
 ## Support
 
