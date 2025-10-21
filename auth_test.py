@@ -20,7 +20,7 @@ def test_original_method():
     """Test using your exact original authentication method"""
     print("=== Testing Original Method (requests + sync) ===")
     
-    api_url = "https://alpha.geotab.com/apiv1"
+    api_url = os.getenv("GEOTAB_API_URL", "https://my.geotab.com/apiv1")
     headers = {"Content-Type": "application/json"}
     
     username = os.getenv("GEOTAB_API_USERNAME")
@@ -66,7 +66,7 @@ async def test_async_method():
     """Test using the async method from MCP server"""
     print("\n=== Testing Async Method (aiohttp) ===")
     
-    api_url = "https://alpha.geotab.com/apiv1"
+    api_url = os.getenv("GEOTAB_API_URL", "https://my.geotab.com/apiv1")
     
     username = os.getenv("GEOTAB_API_USERNAME")
     password = os.getenv("GEOTAB_API_PASSWORD")
@@ -114,7 +114,7 @@ async def test_with_different_encodings():
     """Test different ways of encoding the request body"""
     print("\n=== Testing Different Encodings ===")
     
-    api_url = "https://alpha.geotab.com/apiv1"
+    api_url = os.getenv("GEOTAB_API_URL", "https://my.geotab.com/apiv1")
     username = os.getenv("GEOTAB_API_USERNAME")
     password = os.getenv("GEOTAB_API_PASSWORD")
     database = os.getenv("GEOTAB_API_DATABASE")

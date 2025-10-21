@@ -98,20 +98,20 @@ class GeotabACEClient:
     """
     
     # Class constants
-    DEFAULT_API_URL = "https://alpha.geotab.com/apiv1"
+    DEFAULT_API_URL = "https://my.geotab.com/apiv1"
     DEFAULT_TIMEOUT = 60
     SESSION_TIMEOUT = 3600  # 1 hour
     
-    def __init__(self, credentials: Optional[GeotabCredentials] = None, 
-                 api_url: str = DEFAULT_API_URL):
+    def __init__(self, credentials: Optional[GeotabCredentials] = None,
+                 api_url: Optional[str] = None):
         """
         Initialize the client.
-        
+
         Args:
             credentials: Geotab credentials. If None, will load from environment variables.
-            api_url: The Geotab API endpoint URL.
+            api_url: The Geotab API endpoint URL. If None, will load from GEOTAB_API_URL environment variable or use DEFAULT_API_URL.
         """
-        self.api_url = api_url
+        self.api_url = api_url or os.getenv("GEOTAB_API_URL", self.DEFAULT_API_URL)
         self.credentials = credentials or self._load_credentials_from_env()
         self.session_credentials: Optional[Dict] = None
         self.last_auth_time: Optional[float] = None
