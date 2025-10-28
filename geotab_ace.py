@@ -88,7 +88,7 @@ class TimeoutError(GeotabACEError):
 class GeotabACEClient:
     """
     A client for interacting with the Geotab ACE API.
-    
+
     Example usage:
         client = GeotabACEClient()
         result = await client.ask_question("How many vehicles do we have?")
@@ -96,25 +96,35 @@ class GeotabACEClient:
         if result.data_frame is not None:
             print(result.data_frame.head())
     """
-    
+
     # Class constants
     DEFAULT_API_URL = "https://my.geotab.com/apiv1"
     DEFAULT_TIMEOUT = 60
     SESSION_TIMEOUT = 3600  # 1 hour
-    
+    DRIVER_NAME_COLUMNS = ["DisplayName", "Display Name", "LastName", "Last Name", "FirstName", "First Name"]
+
     def __init__(self, credentials: Optional[GeotabCredentials] = None,
-                 api_url: Optional[str] = None):
+                 api_url: Optional[str] = None,
+                 driver_privacy_mode: Optional[bool] = None):
         """
         Initialize the client.
 
         Args:
             credentials: Geotab credentials. If None, will load from environment variables.
             api_url: The Geotab API endpoint URL. If None, will load from GEOTAB_API_URL environment variable or use DEFAULT_API_URL.
+            driver_privacy_mode: Enable driver name redaction. If None, reads from GEOTAB_DRIVER_PRIVACY_MODE env var (default: True).
         """
         self.api_url = api_url or os.getenv("GEOTAB_API_URL", self.DEFAULT_API_URL)
         self.credentials = credentials or self._load_credentials_from_env()
         self.session_credentials: Optional[Dict] = None
         self.last_auth_time: Optional[float] = None
+
+        # Driver privacy mode: default to True unless explicitly disabled
+        if driver_privacy_mode is None:
+            env_value = os.getenv("GEOTAB_DRIVER_PRIVACY_MODE", "true").lower()
+            self.driver_privacy_mode = env_value not in ["false", "0", "no", "off"]
+        else:
+            self.driver_privacy_mode = driver_privacy_mode
         
     def _load_credentials_from_env(self) -> GeotabCredentials:
         """Load credentials from environment variables."""
@@ -429,12 +439,49 @@ class GeotabACEClient:
     
 
     
+    def _redact_driver_names(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Redact driver name columns by replacing values with '*'.
+
+        This feature protects against accidental exposure of driver names in query
+        results by redacting known driver name columns. However, it is NOT a
+        security boundary:
+
+        - It only redacts columns with specific names (DisplayName, LastName, etc.)
+        - It cannot prevent malicious prompts that rename columns or extract data
+          in other ways
+        - It is designed to prevent accidental leaks, not deliberate data exfiltration
+
+        For true data protection, implement access controls at the API/database level.
+
+        Args:
+            df: DataFrame to redact
+
+        Returns:
+            DataFrame with redacted driver names (modified in place)
+        """
+        if not self.driver_privacy_mode or df is None or df.empty:
+            return df
+
+        redacted_columns = []
+        for col in df.columns:
+            if col in self.DRIVER_NAME_COLUMNS:
+                df[col] = "*"
+                redacted_columns.append(col)
+
+        if redacted_columns:
+            logger.info(f"Driver privacy mode: Redacted columns {redacted_columns}")
+
+        return df
+
     def _create_dataframe(self, query_result: QueryResult) -> None:
         """Create DataFrame from preview data if available."""
         if query_result.preview_data:
             try:
                 query_result.data_frame = pd.DataFrame(query_result.preview_data)
                 logger.debug(f"Created DataFrame with shape: {query_result.data_frame.shape}")
+                # Apply driver privacy redaction
+                query_result.data_frame = self._redact_driver_names(query_result.data_frame)
             except Exception as e:
                 logger.warning(f"Failed to create DataFrame from preview data: {e}")
     
@@ -526,27 +573,29 @@ class GeotabACEClient:
     async def get_full_dataset(self, query_result: QueryResult) -> Optional[pd.DataFrame]:
         """
         Download the full dataset from signed URLs if available.
-        
+
         Args:
             query_result: QueryResult from a completed query
-            
+
         Returns:
             DataFrame with full dataset, or None if not available
         """
         if not query_result.signed_urls:
             logger.debug("No signed URLs available for full dataset")
             return query_result.data_frame
-        
+
         try:
             logger.debug("Downloading full dataset from signed URL")
             timeout = aiohttp.ClientTimeout(total=120)
-            
+
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.get(query_result.signed_urls[0]) as response:
                     response.raise_for_status()
                     csv_content = await response.text()
-                    return pd.read_csv(StringIO(csv_content))
-                    
+                    df = pd.read_csv(StringIO(csv_content))
+                    # Apply driver privacy redaction
+                    return self._redact_driver_names(df)
+
         except Exception as e:
             logger.warning(f"Failed to download full dataset: {e}")
             return query_result.data_frame  # Fallback to preview data

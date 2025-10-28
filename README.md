@@ -130,6 +130,26 @@ Test my Geotab connection
 | `GEOTAB_API_PASSWORD` | Your Geotab password | Yes |
 | `GEOTAB_API_DATABASE` | Your Geotab database name | Yes |
 | `GEOTAB_API_URL` | Geotab API endpoint URL (default: `https://my.geotab.com/apiv1`) | No |
+| `GEOTAB_DRIVER_PRIVACY_MODE` | Redact driver names in results (default: `true`) | No |
+
+### Driver Privacy Preserving Mode
+
+By default, the server automatically redacts driver name information from query results to protect privacy. When enabled, any columns named `DisplayName`, `Display Name`, `LastName`, `Last Name`, `FirstName`, or `First Name` will have their values replaced with `*`.
+
+To disable this feature:
+
+```env
+GEOTAB_DRIVER_PRIVACY_MODE=false
+```
+
+The feature is enabled by default and redacts driver names in both preview and full dataset downloads.
+
+**Important Limitations**: This feature is designed to prevent **accidental exposure** of driver names. It is **not a security boundary** and cannot prevent:
+- Malicious prompts that ask the AI to rename columns before returning data
+- Queries that extract driver information through other column names or methods
+- Deliberate attempts to circumvent the redaction
+
+For true data protection, implement proper access controls at the Geotab API or database level. This feature provides a helpful safety net for accidental leaks, not a security guarantee.
 
 ### Alternative: System Environment Variables
 
