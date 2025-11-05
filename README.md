@@ -9,6 +9,8 @@ An MCP (Model Context Protocol) server that provides Claude with tools to intera
 - **Automatic Authentication**: Handles Geotab API authentication transparently
 - **Async Query Support**: Start long-running queries and check their progress
 - **Full Dataset Retrieval**: Downloads complete datasets when available
+- **DuckDB Integration**: Large datasets (>1000 rows) are automatically cached in DuckDB for SQL analysis
+- **SQL Query Interface**: Query cached datasets with SQL instead of retrieving thousands of rows
 - **Multiple Query Workflows**: Synchronous and asynchronous query patterns
 - **Debug Tools**: Built-in debugging for troubleshooting queries
 - **Secure Credential Management**: Uses environment variables for credentials
@@ -96,6 +98,43 @@ Test API connectivity and authentication - useful for troubleshooting.
 
 ### `geotab_debug_query`
 Get detailed debug information about a query's response structure.
+
+### `geotab_query_duckdb`
+Execute SQL queries on large datasets cached in DuckDB. When Ace returns more than 1000 rows, the data is automatically loaded into DuckDB instead of being sent to Claude.
+
+**Example**: "Query the cached trip data with: SELECT driver_id, COUNT(*) as trips FROM ace_123_456 GROUP BY driver_id ORDER BY trips DESC LIMIT 10"
+
+### `geotab_list_cached_datasets`
+List all datasets currently cached in DuckDB with their metadata, including row counts, columns, and table names.
+
+**Example**: "Show me what datasets are cached in DuckDB"
+
+## DuckDB Caching for Large Datasets
+
+When Ace returns datasets with more than 1000 rows, instead of sending all that data to Claude, the MCP server:
+
+1. **Automatically loads** the data into an in-memory DuckDB database
+2. **Returns metadata** including row count, column names, data types, and a sample of 20 rows
+3. **Provides a table name** for querying the cached data
+4. **Offers SQL capabilities** to analyze the data efficiently
+
+This approach:
+- Prevents overwhelming Claude with thousands of rows
+- Enables powerful SQL-based analysis
+- Keeps the full dataset accessible for complex queries
+- Works transparently without manual configuration
+
+**Example workflow:**
+```
+User: "Get all trips from last month"
+→ Ace returns 10,000 rows
+→ Server caches in DuckDB as table 'ace_chat123_msg456'
+→ Claude sees: metadata + 20 sample rows + instructions
+
+User: "Show me the top 10 drivers by trip count"
+→ Claude queries: SELECT driver_id, COUNT(*) as trips FROM ace_chat123_msg456 GROUP BY driver_id ORDER BY trips DESC LIMIT 10
+→ Returns aggregated results instantly
+```
 
 ## Usage Patterns
 
