@@ -6,11 +6,12 @@ Tests the DuckDB integration for caching large datasets from Ace queries.
 """
 
 import sys
+import os
 import pandas as pd
 from datetime import datetime, timedelta
 
 # Import the DuckDB manager
-sys.path.insert(0, '/home/user/geotab-ace-mcp-demo')
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from duckdb_manager import DuckDBManager
 
 
