@@ -439,6 +439,122 @@ def test_sql_injection_protection():
         raise
 
 
+def test_cte_queries():
+    """Test Common Table Expression (CTE) support"""
+    print("\n=== Test 16: CTE Query Support ===")
+    try:
+        manager = DuckDBManager()
+
+        # Create test data
+        df = pd.DataFrame({
+            'product': ['A', 'B', 'C', 'A', 'B'],
+            'sales': [100, 200, 150, 120, 180],
+            'region': ['North', 'South', 'North', 'South', 'North']
+        })
+
+        table_name = manager.store_dataframe(
+            chat_id="cte_test",
+            message_group_id="msg_cte",
+            df=df
+        )
+
+        # Test CTE query
+        print("Testing CTE query...")
+        cte_query = f"""
+        WITH regional_sales AS (
+            SELECT region, SUM(sales) as total_sales
+            FROM {table_name}
+            GROUP BY region
+        )
+        SELECT * FROM regional_sales ORDER BY total_sales DESC
+        """
+
+        result_df, metadata = manager.query(cte_query)
+        assert len(result_df) == 2, "Should return 2 regions"
+        assert result_df['region'].iloc[0] == 'North', "North should have highest sales"
+        print(f"✅ CTE query executed successfully: {len(result_df)} rows")
+
+        # Test nested CTE
+        print("Testing nested CTE...")
+        nested_cte = f"""
+        WITH product_totals AS (
+            SELECT product, SUM(sales) as total
+            FROM {table_name}
+            GROUP BY product
+        ),
+        ranked_products AS (
+            SELECT product, total,
+                   ROW_NUMBER() OVER (ORDER BY total DESC) as rank
+            FROM product_totals
+        )
+        SELECT * FROM ranked_products WHERE rank <= 2
+        """
+
+        result_df, metadata = manager.query(nested_cte)
+        assert len(result_df) <= 2, "Should return top 2 products"
+        print(f"✅ Nested CTE query executed successfully")
+
+        print("✅ CTE query support test passed")
+        return True
+    except Exception as e:
+        print(f"❌ CTE query support test failed: {e}")
+        raise
+
+
+def test_absolute_limit_enforcement():
+    """Test that safety limit is always enforced"""
+    print("\n=== Test 17: Absolute LIMIT Enforcement ===")
+    try:
+        manager = DuckDBManager()
+
+        # Create test data with 100 rows
+        df = pd.DataFrame({
+            'id': range(100),
+            'value': range(100, 200)
+        })
+
+        table_name = manager.store_dataframe(
+            chat_id="limit_test",
+            message_group_id="msg_limit",
+            df=df
+        )
+
+        # Test 1: Query without LIMIT should respect safety limit
+        print("Testing query without LIMIT...")
+        result_df, metadata = manager.query(f"SELECT * FROM {table_name}", limit=10)
+        assert len(result_df) == 10, f"Should enforce safety limit of 10, got {len(result_df)}"
+        print(f"✅ Safety limit enforced: {len(result_df)} rows")
+
+        # Test 2: Query with LIMIT higher than safety limit should be capped
+        print("Testing LIMIT bypass prevention...")
+        result_df, metadata = manager.query(
+            f"SELECT * FROM {table_name} LIMIT 50",
+            limit=10
+        )
+        assert len(result_df) == 10, f"Should cap to safety limit of 10, got {len(result_df)}"
+        print(f"✅ User LIMIT (50) capped to safety limit (10): {len(result_df)} rows")
+
+        # Test 3: Query with LIMIT lower than safety limit should use user's LIMIT
+        print("Testing user LIMIT lower than safety limit...")
+        result_df, metadata = manager.query(
+            f"SELECT * FROM {table_name} LIMIT 5",
+            limit=10
+        )
+        assert len(result_df) == 5, f"Should respect user LIMIT of 5, got {len(result_df)}"
+        print(f"✅ User LIMIT (5) respected when lower than safety limit: {len(result_df)} rows")
+
+        # Test 4: Verify metadata includes both queries
+        assert 'original_query' in metadata, "Metadata should include original query"
+        assert 'query_executed' in metadata, "Metadata should include executed query"
+        print(f"✅ Metadata correctly tracks both original and enforced queries")
+
+        print("✅ Absolute LIMIT enforcement test passed")
+        return True
+    except Exception as e:
+        print(f"❌ Absolute LIMIT enforcement test failed: {e}")
+        raise
+
+
 def run_all_tests():
     """Run all tests"""
     print("🚀 Starting DuckDB Manager Test Suite\n")
@@ -505,6 +621,14 @@ def run_all_tests():
 
         # Test 15: SQL Injection Protection
         test_sql_injection_protection()
+        tests_passed += 1
+
+        # Test 16: CTE Query Support
+        test_cte_queries()
+        tests_passed += 1
+
+        # Test 17: Absolute LIMIT Enforcement
+        test_absolute_limit_enforcement()
         tests_passed += 1
 
     except Exception as e:

@@ -84,7 +84,8 @@ class DuckDBManager:
         """
         Validate that a SQL query is safe for execution.
 
-        Only allows SELECT statements and blocks dangerous operations.
+        Allows SELECT statements and CTEs (WITH...SELECT).
+        Blocks dangerous operations like DROP, DELETE, UPDATE.
 
         Args:
             sql: The SQL query to validate
@@ -95,9 +96,9 @@ class DuckDBManager:
         # Convert to uppercase for case-insensitive checking
         sql_upper = sql.upper().strip()
 
-        # Must start with SELECT
-        if not sql_upper.startswith('SELECT'):
-            raise ValueError("Only SELECT queries are allowed")
+        # Must start with SELECT or WITH (for CTEs)
+        if not (sql_upper.startswith('SELECT') or sql_upper.startswith('WITH')):
+            raise ValueError("Only SELECT queries and CTEs (WITH...SELECT) are allowed")
 
         # Check for dangerous keywords
         for keyword in self.DANGEROUS_KEYWORDS:
@@ -158,12 +159,15 @@ class DuckDBManager:
         """
         Execute a SQL query on stored datasets.
 
-        Only SELECT queries are allowed for safety. Dangerous operations
+        Only SELECT queries and CTEs are allowed for safety. Dangerous operations
         like DROP, DELETE, UPDATE are blocked.
 
+        The safety limit is always enforced regardless of user-supplied LIMIT clauses.
+        If the user supplies a LIMIT higher than the safety limit, it will be capped.
+
         Args:
-            sql: SQL query to execute (SELECT only)
-            limit: Maximum rows to return (safety limit)
+            sql: SQL query to execute (SELECT or WITH...SELECT)
+            limit: Maximum rows to return (safety limit, always enforced)
 
         Returns:
             Tuple of (DataFrame with results, metadata dict)
@@ -175,19 +179,23 @@ class DuckDBManager:
             # Validate the SQL query for safety
             self._validate_sql_query(sql)
 
-            # Add LIMIT if not present for safety
-            # Use word-boundary regex to avoid matching "UNLIMITED" or "limit" in strings
-            if not self.LIMIT_PATTERN.search(sql):
-                sql = f"{sql.strip().rstrip(';')} LIMIT {limit}"
+            # Enforce safety limit by wrapping query in a subquery
+            # This ensures the limit is always applied regardless of user-supplied LIMIT
+            original_sql = sql.strip().rstrip(';')
 
-            # Execute query
-            result_df = self.conn.execute(sql).fetchdf()
+            # Wrap in subquery to enforce absolute limit
+            # This prevents bypass if user supplies their own LIMIT clause
+            enforced_sql = f"SELECT * FROM ({original_sql}) AS subquery LIMIT {limit}"
+
+            # Execute query with enforced limit
+            result_df = self.conn.execute(enforced_sql).fetchdf()
 
             metadata = {
                 "row_count": len(result_df),
                 "column_count": len(result_df.columns),
                 "columns": list(result_df.columns),
-                "query_executed": sql
+                "query_executed": enforced_sql,
+                "original_query": original_sql
             }
 
             return result_df, metadata
