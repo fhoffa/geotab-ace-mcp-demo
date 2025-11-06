@@ -15,9 +15,10 @@ from typing import Optional
 
 from fastmcp import FastMCP
 from geotab_ace import (
-    GeotabACEClient, QueryStatus, 
+    GeotabACEClient, QueryStatus,
     GeotabACEError, AuthenticationError, APIError, TimeoutError
 )
+from duckdb_manager import DuckDBManager
 
 # Configure logging
 logging.basicConfig(
@@ -32,6 +33,17 @@ mcp = FastMCP("geotab-mcp-server")
 
 # Global client instance
 ace_client: Optional[GeotabACEClient] = None
+
+# Global DuckDB manager instance
+duckdb_manager: Optional[DuckDBManager] = None
+
+
+def get_duckdb_manager() -> DuckDBManager:
+    """Get or create the DuckDB manager instance."""
+    global duckdb_manager
+    if duckdb_manager is None:
+        duckdb_manager = DuckDBManager()
+    return duckdb_manager
 
 
 def get_ace_client() -> GeotabACEClient:
@@ -265,36 +277,89 @@ async def geotab_get_results(chat_id: str, message_group_id: str, include_full_d
         # Add comprehensive dataset information
         if result.data_frame is not None and not result.data_frame.empty:
             df = result.data_frame
-            
-            # Determine how much data to show
-            preview_rows = min(100 if include_full_data else 50, len(df))
-            preview_table = df.head(preview_rows).to_string(index=False, max_colwidth=40)
-            
-            data_source = "complete dataset" if result.signed_urls and include_full_data else "preview data"
-            dataset_info = f"📊 **Dataset** ({data_source}: {len(df)} rows × {len(df.columns)} columns)"
-            
-            if len(df) <= preview_rows:
-                parts.append(f"{dataset_info}\n```\n{preview_table}\n```")
+
+            # For large datasets (>200 rows), load into DuckDB instead of returning all data
+            # Threshold rationale:
+            # - Claude can handle ~200 rows efficiently in context without overwhelming tokens
+            # - Larger datasets overwhelm token limits and reduce analysis quality
+            # - DuckDB enables SQL-based analysis which is more appropriate for large data
+            # - Provides better UX by showing metadata + sample instead of flooding with data
+            DUCKDB_THRESHOLD = 200
+            if len(df) > DUCKDB_THRESHOLD:
+                # Store in DuckDB
+                db_manager = get_duckdb_manager()
+                table_name = db_manager.store_dataframe(
+                    chat_id=chat_id,
+                    message_group_id=message_group_id,
+                    df=df,
+                    question=result.text_response[:200] if result.text_response else "",
+                    sql_query=result.sql_query or ""
+                )
+
+                # Show sample data
+                sample_size = 20
+                sample_df = df.head(sample_size)
+                preview_table = sample_df.to_string(index=False, max_colwidth=40)
+
+                parts.append(f"📊 **Large Dataset Loaded into DuckDB**")
+                parts.append(f"• **Total Rows**: {len(df):,}")
+                parts.append(f"• **Columns**: {len(df.columns)}")
+                parts.append(f"• **Table Name**: `{table_name}`")
+                parts.append(f"\n**Sample Data** (first {sample_size} of {len(df):,} rows):")
+                parts.append(f"```\n{preview_table}\n```")
+
+                # Add column information
+                parts.append(f"\n📋 **All Columns ({len(df.columns)})**:")
+                parts.append(f"{', '.join(df.columns.astype(str))}")
+
+                # Add basic statistics for numeric columns
+                numeric_cols = df.select_dtypes(include=['number']).columns
+                if len(numeric_cols) > 0:
+                    parts.append(f"\n📊 **Numeric Columns ({len(numeric_cols)})**:")
+                    stats_info = []
+                    for col in numeric_cols[:10]:  # Limit to first 10 numeric columns
+                        try:
+                            stats_info.append(f"  • {col}: min={df[col].min():,.1f}, max={df[col].max():,.1f}, avg={df[col].mean():,.1f}")
+                        except Exception:
+                            continue
+                    if stats_info:
+                        parts.append("\n".join(stats_info))
+
+                # Instructions for querying
+                parts.append(f"\n💡 **Query this data with SQL**:")
+                parts.append(f"Use `geotab_query_duckdb('{table_name}', 'YOUR SQL QUERY')` to analyze this dataset.")
+                parts.append(f"Example: `geotab_query_duckdb('{table_name}', 'SELECT * FROM {table_name} WHERE column_name > 100 ORDER BY date DESC LIMIT 50')`")
+
             else:
-                parts.append(f"{dataset_info}\n```\n{preview_table}\n\n... and {len(df) - preview_rows} more rows\n```")
-            
-            # Add column information for datasets with many columns
-            if len(df.columns) > 10:
-                parts.append(f"📋 **All Columns**: {', '.join(df.columns.astype(str))}")
-                
-            # Add basic statistics for numeric columns
-            numeric_cols = df.select_dtypes(include=['number']).columns
-            if len(numeric_cols) > 0 and len(numeric_cols) <= 5:
-                stats_info = []
-                for col in numeric_cols:
-                    try:
-                        total = df[col].sum()
-                        avg = df[col].mean()
-                        stats_info.append(f"{col}: Total={total:,.0f}, Avg={avg:.1f}")
-                    except:
-                        continue
-                if stats_info:
-                    parts.append(f"📊 **Quick Stats**: {'; '.join(stats_info)}")
+                # Normal flow for smaller datasets
+                preview_rows = min(100 if include_full_data else 50, len(df))
+                preview_table = df.head(preview_rows).to_string(index=False, max_colwidth=40)
+
+                data_source = "complete dataset" if result.signed_urls and include_full_data else "preview data"
+                dataset_info = f"📊 **Dataset** ({data_source}: {len(df)} rows × {len(df.columns)} columns)"
+
+                if len(df) <= preview_rows:
+                    parts.append(f"{dataset_info}\n```\n{preview_table}\n```")
+                else:
+                    parts.append(f"{dataset_info}\n```\n{preview_table}\n\n... and {len(df) - preview_rows} more rows\n```")
+
+                # Add column information for datasets with many columns
+                if len(df.columns) > 10:
+                    parts.append(f"📋 **All Columns**: {', '.join(df.columns.astype(str))}")
+
+                # Add basic statistics for numeric columns
+                numeric_cols = df.select_dtypes(include=['number']).columns
+                if len(numeric_cols) > 0 and len(numeric_cols) <= 5:
+                    stats_info = []
+                    for col in numeric_cols:
+                        try:
+                            total = df[col].sum()
+                            avg = df[col].mean()
+                            stats_info.append(f"{col}: Total={total:,.0f}, Avg={avg:.1f}")
+                        except Exception:
+                            continue
+                    if stats_info:
+                        parts.append(f"📊 **Quick Stats**: {'; '.join(stats_info)}")
         
         if not parts:
             parts.append("✅ Query completed successfully but no data or analysis returned.")
@@ -482,30 +547,172 @@ async def geotab_debug_query(chat_id: str, message_group_id: str) -> str:
         return f"💥 **Debug Error**: {str(e)}"
 
 
+@mcp.tool()
+async def geotab_query_duckdb(table_name: str, sql_query: str, limit: int = 1000) -> str:
+    """
+    Execute a SQL query on a dataset cached in DuckDB.
+
+    When Ace returns large datasets (>200 rows), they are automatically loaded into
+    DuckDB. Use this tool to run SQL queries and analyze the data.
+
+    Args:
+        table_name (str): Name of the table to query (provided when dataset was loaded)
+        sql_query (str): SQL query to execute (DuckDB SQL syntax)
+        limit (int): Maximum rows to return (default: 1000, safety limit)
+
+    Returns:
+        str: Query results formatted as a table with metadata
+
+    Example:
+        geotab_query_duckdb('ace_123_456', 'SELECT device_id, COUNT(*) as trips FROM ace_123_456 GROUP BY device_id ORDER BY trips DESC')
+    """
+    try:
+        if not table_name or not sql_query:
+            return "Error: Both table_name and sql_query are required"
+
+        db_manager = get_duckdb_manager()
+
+        # Check if table exists
+        if not db_manager.table_exists(table_name):
+            available = db_manager.list_datasets()
+            if available:
+                table_list = "\n".join([f"• `{ds['table_name']}` ({ds['row_count']:,} rows)" for ds in available])
+                return f"Table '{table_name}' not found.\n\nAvailable tables:\n{table_list}\n\nUse geotab_list_cached_datasets() for more details."
+            else:
+                return "No cached datasets available. Large datasets (>200 rows) are automatically cached when retrieved from Ace."
+
+        logger.info(f"Executing DuckDB query on {table_name}: {sql_query[:100]}...")
+
+        # Execute query
+        result_df, metadata = db_manager.query(sql_query, limit=limit)
+
+        parts = []
+        parts.append(f"**Query Results**")
+        parts.append(f"• Table: `{table_name}`")
+        parts.append(f"• Rows returned: {metadata['row_count']:,}")
+        parts.append(f"• Columns: {metadata['column_count']}")
+
+        if len(result_df) == 0:
+            parts.append("\nNo rows matched your query.")
+        else:
+            # Show results
+            max_display_rows = min(100, len(result_df))
+            result_table = result_df.head(max_display_rows).to_string(index=False, max_colwidth=50)
+
+            parts.append(f"\n**Results:**\n```\n{result_table}\n```")
+
+            if len(result_df) > max_display_rows:
+                parts.append(f"\n*Showing {max_display_rows} of {len(result_df)} rows*")
+
+            # Add statistics for numeric columns
+            numeric_cols = result_df.select_dtypes(include=['number']).columns
+            if len(numeric_cols) > 0 and len(numeric_cols) <= 5:
+                parts.append(f"\n**Statistics:**")
+                for col in numeric_cols:
+                    try:
+                        parts.append(f"• {col}: min={result_df[col].min():,.1f}, max={result_df[col].max():,.1f}, avg={result_df[col].mean():,.1f}, total={result_df[col].sum():,.1f}")
+                    except Exception:
+                        continue
+
+        # Show the original dataset info
+        dataset_info = db_manager.get_dataset_info(table_name)
+        if dataset_info and dataset_info.get('sql_query'):
+            parts.append(f"\n**Original Ace Query:**\n```sql\n{dataset_info['sql_query']}\n```")
+
+        return "\n".join(parts)
+
+    except Exception as e:
+        logger.error(f"Error querying DuckDB: {e}")
+        logger.error(traceback.format_exc())
+        return f"Error executing query: {str(e)}\n\nMake sure your SQL syntax is correct and the table name exists."
+
+
+@mcp.tool()
+async def geotab_list_cached_datasets() -> str:
+    """
+    List all datasets currently cached in DuckDB.
+
+    Shows metadata about each cached dataset including row counts, columns,
+    and the original question that generated the data.
+
+    Returns:
+        str: List of cached datasets with their metadata
+    """
+    try:
+        db_manager = get_duckdb_manager()
+        datasets = db_manager.list_datasets()
+
+        if not datasets:
+            return """No cached datasets available.
+
+Large datasets (>200 rows) from Ace queries are automatically cached in DuckDB.
+When you retrieve results with more than 200 rows, they will appear here."""
+
+        parts = [f"**Cached Datasets in DuckDB** ({len(datasets)} total)\n"]
+
+        for ds in datasets:
+            parts.append(f"**Table: `{ds['table_name']}`**")
+            parts.append(f"• Rows: {ds['row_count']:,}")
+            parts.append(f"• Columns: {ds['column_count']} ({', '.join(ds['columns'][:5])}{'...' if ds['column_count'] > 5 else ''})")
+            if ds.get('question'):
+                parts.append(f"• Original question: {ds['question'][:100]}...")
+            if ds.get('sql_query'):
+                parts.append(f"• Ace SQL: `{ds['sql_query'][:100]}...`")
+            parts.append(f"• Created: {ds['created_at']}")
+            parts.append(f"• Query IDs: Chat `{ds['chat_id']}`, Message Group `{ds['message_group_id']}`")
+            parts.append("")
+
+        parts.append("**Usage:**")
+        parts.append("Use `geotab_query_duckdb('table_name', 'SQL QUERY')` to analyze any of these datasets.")
+        parts.append("\nExample: `geotab_query_duckdb('ace_123_456', 'SELECT * FROM ace_123_456 LIMIT 10')`")
+
+        return "\n".join(parts)
+
+    except Exception as e:
+        logger.error(f"Error listing datasets: {e}")
+        return f"Error listing datasets: {str(e)}"
+
+
 @mcp.resource("geotab://status")
 def get_server_status():
     """Get current server status and capability information."""
     try:
-        global ace_client
+        global ace_client, duckdb_manager
+        db_info = {}
+        if duckdb_manager is not None:
+            datasets = duckdb_manager.list_datasets()
+            db_info = {
+                "duckdb_enabled": True,
+                "cached_datasets": len(datasets),
+                "total_cached_rows": sum(ds['row_count'] for ds in datasets)
+            }
+        else:
+            db_info = {"duckdb_enabled": False}
+
         return {
             "server": "geotab-mcp-server",
-            "version": "2.0-enhanced",
+            "version": "3.0-duckdb",
             "status": "running",
             "client_initialized": ace_client is not None,
+            **db_info,
             "features": [
                 "SQL query extraction",
-                "Enhanced reasoning capture", 
+                "Enhanced reasoning capture",
                 "Full dataset download",
                 "Async query processing",
-                "Comprehensive debugging"
+                "Comprehensive debugging",
+                "DuckDB caching for large datasets",
+                "SQL querying on cached data"
             ],
             "tools_available": [
                 "geotab_ask_question",
-                "geotab_check_status", 
+                "geotab_check_status",
                 "geotab_get_results",
                 "geotab_start_query_async",
                 "geotab_test_connection",
-                "geotab_debug_query"
+                "geotab_debug_query",
+                "geotab_query_duckdb",
+                "geotab_list_cached_datasets"
             ]
         }
     except Exception as e:
