@@ -24,7 +24,11 @@ class DuckDBManager:
     """
 
     def __init__(self):
-        """Initialize in-memory DuckDB connection."""
+        """
+        Create an in-memory DuckDB connection and initialize the dataset metadata store.
+        
+        Sets self.conn to an in-memory DuckDB connection and self.datasets to an empty dictionary for tracking stored dataset metadata.
+        """
         self.conn = duckdb.connect(":memory:")
         self.datasets: Dict[str, Dict] = {}  # Metadata about stored datasets
         logger.info("DuckDB manager initialized with in-memory database")
@@ -32,18 +36,20 @@ class DuckDBManager:
     def store_dataframe(self, chat_id: str, message_group_id: str, df: pd.DataFrame,
                        question: str = "", sql_query: str = "") -> str:
         """
-        Store a DataFrame in DuckDB for querying.
-
-        Args:
-            chat_id: Chat ID from Ace query
-            message_group_id: Message group ID from Ace query
-            df: DataFrame to store
-            question: Original question asked
-            sql_query: SQL query that generated this data
-
-        Returns:
-            Table name where data is stored
-        """
+                       Store a Pandas DataFrame in the in-memory DuckDB instance and record metadata for later querying.
+                       
+                       Stores the DataFrame as a DuckDB table named "ace_<chat_id>_<message_group_id>" with hyphens replaced by underscores, and records metadata including chat_id, message_group_id, question, sql_query, row_count, column_count, columns, dtypes, and created_at.
+                       
+                       Parameters:
+                           chat_id (str): Identifier of the chat associated with the dataset.
+                           message_group_id (str): Identifier of the message group associated with the dataset.
+                           df (pd.DataFrame): DataFrame to store.
+                           question (str): Optional original question associated with the data.
+                           sql_query (str): Optional SQL query that produced the DataFrame.
+                       
+                       Returns:
+                           str: The name of the DuckDB table where the DataFrame was stored (format: "ace_<chat_id>_<message_group_id>" with "-" replaced by "_").
+                       """
         # Create a clean table name
         table_name = f"ace_{chat_id}_{message_group_id}".replace("-", "_")
 
@@ -68,14 +74,16 @@ class DuckDBManager:
 
     def query(self, sql: str, limit: int = 1000) -> Tuple[pd.DataFrame, Dict]:
         """
-        Execute a SQL query on stored datasets.
-
-        Args:
-            sql: SQL query to execute
-            limit: Maximum rows to return (safety limit)
-
+        Execute a SQL query against stored DuckDB datasets.
+        
+        If the provided SQL contains no LIMIT clause, a `LIMIT {limit}` clause will be appended to enforce a safety cap.
+        
+        Parameters:
+            sql (str): SQL query to execute.
+            limit (int): Maximum number of rows to return when no LIMIT is present in `sql`.
+        
         Returns:
-            Tuple of (DataFrame with results, metadata dict)
+            tuple: A pair (result_df, metadata) where `result_df` is a pandas DataFrame of query results and `metadata` is a dict containing `row_count`, `column_count`, `columns`, and `query_executed`.
         """
         try:
             # Add LIMIT if not present for safety
@@ -100,11 +108,26 @@ class DuckDBManager:
             raise
 
     def get_dataset_info(self, table_name: str) -> Optional[Dict]:
-        """Get metadata about a stored dataset."""
+        """
+        Retrieve stored metadata for a dataset table by name.
+        
+        Parameters:
+            table_name (str): The DuckDB table name for the dataset (e.g. "ace_<chat_id>_<message_group_id>").
+        
+        Returns:
+            dict or None: Metadata dictionary for the dataset if found (contains keys like `chat_id`, `message_group_id`, `row_count`, `column_count`, `columns`, `dtypes`, `created_at`), or `None` if no matching dataset exists.
+        """
         return self.datasets.get(table_name)
 
     def list_datasets(self) -> List[Dict]:
-        """List all stored datasets with their metadata."""
+        """
+        Return a list of stored dataset entries with their metadata.
+        
+        Returns:
+            List[Dict]: A list where each element is a dictionary containing:
+                - "table_name" (str): The DuckDB table name for the dataset.
+                - other keys: Metadata recorded when the dataset was stored (e.g., "chat_id", "message_group_id", "question", "sql_query", "row_count", "column_count", "columns", "dtypes", "created_at").
+        """
         return [
             {
                 "table_name": table_name,
@@ -114,18 +137,39 @@ class DuckDBManager:
         ]
 
     def table_exists(self, table_name: str) -> bool:
-        """Check if a table exists in DuckDB."""
+        """
+        Determine whether a stored dataset table exists in the manager.
+        
+        @returns `True` if a table with the given name is registered, `False` otherwise.
+        """
         return table_name in self.datasets
 
     def get_sample_data(self, table_name: str, limit: int = 10) -> pd.DataFrame:
-        """Get a sample of data from a table."""
+        """
+        Retrieve a small sample of rows from a stored table.
+        
+        Parameters:
+            table_name (str): Name of the DuckDB table to sample.
+            limit (int): Maximum number of rows to return.
+        
+        Returns:
+            pd.DataFrame: A DataFrame containing up to `limit` rows from the table.
+        
+        Raises:
+            ValueError: If the specified `table_name` does not exist.
+        """
         if not self.table_exists(table_name):
             raise ValueError(f"Table '{table_name}' not found")
 
         return self.conn.execute(f"SELECT * FROM {table_name} LIMIT {limit}").fetchdf()
 
     def cleanup_old_datasets(self, max_age_minutes: int = 60):
-        """Remove datasets older than specified age."""
+        """
+        Remove stored DuckDB tables and their metadata that are older than the specified age.
+        
+        Parameters:
+            max_age_minutes (int): Age threshold in minutes; datasets older than this value will be dropped and their metadata removed. Defaults to 60.
+        """
         current_time = datetime.now()
         tables_to_remove = []
 
