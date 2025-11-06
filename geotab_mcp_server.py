@@ -39,7 +39,12 @@ duckdb_manager: Optional[DuckDBManager] = None
 
 
 def get_duckdb_manager() -> DuckDBManager:
-    """Get or create the DuckDB manager instance."""
+    """
+    Get the global DuckDBManager singleton, creating it if necessary.
+    
+    Returns:
+        duckdb_manager (DuckDBManager): The shared DuckDBManager instance.
+    """
     global duckdb_manager
     if duckdb_manager is None:
         duckdb_manager = DuckDBManager()
@@ -47,7 +52,12 @@ def get_duckdb_manager() -> DuckDBManager:
 
 
 def get_ace_client() -> GeotabACEClient:
-    """Get or create the ACE client instance."""
+    """
+    Return the module-level GeotabACEClient singleton, creating it if necessary.
+    
+    Returns:
+        GeotabACEClient: The shared ACE client instance used for API calls. Creates and stores a new instance on first call.
+    """
     global ace_client
     if ace_client is None:
         ace_client = GeotabACEClient()
@@ -210,15 +220,17 @@ async def geotab_check_status(chat_id: str, message_group_id: str) -> str:
 @mcp.tool()
 async def geotab_get_results(chat_id: str, message_group_id: str, include_full_data: bool = True) -> str:
     """
-    Get the complete results from a completed Geotab query.
+    Retrieve and format the final results for a completed Geotab ACE query identified by chat and message group IDs.
     
-    Args:
-        chat_id (str): Chat ID from a previous question
-        message_group_id (str): Message group ID from a previous question
-        include_full_data (bool): Whether to download the full dataset (default: True)
-        
+    When the query is complete, the returned string includes the SQL (if available), AI analysis sections (reasoning, analysis, interpretation, insight, understanding, process), a textual summary, and dataset information. For large result sets the dataset is stored in DuckDB and the response includes table name, sample rows, column list, numeric summaries, and instructions to query the stored dataset; for smaller result sets the response includes a preview and quick statistics. If the query is not ready or has failed, the string contains a clear status or error message.
+    
+    Parameters:
+        chat_id (str): Chat ID associated with the query.
+        message_group_id (str): Message group ID associated with the query.
+        include_full_data (bool): If true, attempt to download and include the full dataset when available.
+    
     Returns:
-        str: Complete results including SQL query, analysis, and full dataset
+        str: Formatted output containing query SQL, analysis, summary, dataset information, or a status/error message.
     """
     try:
         if not chat_id or not message_group_id:
@@ -510,14 +522,16 @@ export GEOTAB_API_DATABASE="your_database"
 @mcp.tool()
 async def geotab_debug_query(chat_id: str, message_group_id: str) -> str:
     """
-    Debug function to see raw response data and detailed extraction info from a query.
+    Return raw API response and extraction details for a previously started query.
     
-    Args:
-        chat_id (str): Chat ID from a previous question
-        message_group_id (str): Message group ID from a previous question
-        
+    Fetches the full query status from the ACE client and formats a markdown-friendly debug payload that includes the query status and the raw JSON API response. Intended for inspecting internal response contents for a given chat and message group.
+    
+    Parameters:
+        chat_id (str): Chat ID associated with the original question.
+        message_group_id (str): Message group ID associated with the original question.
+    
     Returns:
-        str: Raw debug information about the query response and data extraction
+        str: Formatted debug information containing the query status and the raw API JSON, or an error message if the query cannot be retrieved.
     """
     try:
         if not chat_id or not message_group_id:
@@ -545,21 +559,17 @@ async def geotab_debug_query(chat_id: str, message_group_id: str) -> str:
 @mcp.tool()
 async def geotab_query_duckdb(table_name: str, sql_query: str, limit: int = 1000) -> str:
     """
-    Execute a SQL query on a dataset cached in DuckDB.
-
-    When Ace returns large datasets (>1000 rows), they are automatically loaded into
-    DuckDB. Use this tool to run SQL queries and analyze the data.
-
-    Args:
-        table_name (str): Name of the table to query (provided when dataset was loaded)
-        sql_query (str): SQL query to execute (DuckDB SQL syntax)
-        limit (int): Maximum rows to return (default: 1000, safety limit)
-
+    Run a DuckDB SQL query against a cached dataset and return a formatted summary of the results.
+    
+    If the named table does not exist, returns a message listing available cached datasets (if any). For matching results returns table name, rows/columns counts, a sample of rows (up to limits), optional numeric column statistics, and the original Ace SQL query when available.
+    
+    Parameters:
+        table_name (str): Name of the cached DuckDB table to query.
+        sql_query (str): DuckDB-compatible SQL query to execute against the table.
+        limit (int): Maximum number of rows to retrieve from DuckDB (default 1000).
+    
     Returns:
-        str: Query results formatted as a table with metadata
-
-    Example:
-        geotab_query_duckdb('ace_123_456', 'SELECT device_id, COUNT(*) as trips FROM ace_123_456 GROUP BY device_id ORDER BY trips DESC')
+        str: A human-readable string containing query metadata, a results preview or a message explaining errors or missing tables.
     """
     try:
         if not table_name or not sql_query:
@@ -625,13 +635,16 @@ async def geotab_query_duckdb(table_name: str, sql_query: str, limit: int = 1000
 @mcp.tool()
 async def geotab_list_cached_datasets() -> str:
     """
-    List all datasets currently cached in DuckDB.
-
-    Shows metadata about each cached dataset including row counts, columns,
-    and the original question that generated the data.
-
+    List metadata for all datasets currently cached in DuckDB.
+    
+    Returns a formatted string that lists each cached dataset's table name, row count,
+    column count (with a sample of column names), creation time, associated Chat and
+    Message Group IDs, and available original question or Ace SQL excerpt. If no
+    datasets are cached, returns a message explaining that large Ace query results
+    are stored in DuckDB. On failure returns an error message describing the problem.
+    
     Returns:
-        str: List of cached datasets with their metadata
+        str: Formatted listing of cached datasets or an error/no-data message.
     """
     try:
         db_manager = get_duckdb_manager()
@@ -670,7 +683,24 @@ When you retrieve results with more than 1000 rows, they will appear here."""
 
 @mcp.resource("geotab://status")
 def get_server_status():
-    """Get current server status and capability information."""
+    """
+    Provides server runtime status and capability metadata.
+    
+    Returns a dictionary containing:
+    - server: server name string.
+    - version: server version string.
+    - status: "running" when healthy or "error" on failure.
+    - client_initialized: `True` if the ACE client has been initialized, `False` otherwise.
+    - duckdb_enabled: `True` if DuckDB is available, `False` otherwise.
+    - cached_datasets: number of datasets cached in DuckDB (present when duckdb_enabled is `True`).
+    - total_cached_rows: sum of rows across cached datasets (present when duckdb_enabled is `True`).
+    - features: list of supported feature descriptions.
+    - tools_available: list of available tool names.
+    - error: error message string when status is "error".
+    
+    Returns:
+        dict: Status and capability information as described above.
+    """
     try:
         global ace_client, duckdb_manager
         db_info = {}
