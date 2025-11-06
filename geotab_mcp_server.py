@@ -279,6 +279,11 @@ async def geotab_get_results(chat_id: str, message_group_id: str, include_full_d
             df = result.data_frame
 
             # For large datasets (>1000 rows), load into DuckDB instead of returning all data
+            # Threshold rationale:
+            # - Claude can handle ~1000 rows efficiently in context
+            # - Larger datasets overwhelm token limits and reduce analysis quality
+            # - DuckDB enables SQL-based analysis which is more appropriate for large data
+            # - Provides better UX by showing metadata + sample instead of flooding with data
             DUCKDB_THRESHOLD = 1000
             if len(df) > DUCKDB_THRESHOLD:
                 # Store in DuckDB
@@ -315,7 +320,7 @@ async def geotab_get_results(chat_id: str, message_group_id: str, include_full_d
                     for col in numeric_cols[:10]:  # Limit to first 10 numeric columns
                         try:
                             stats_info.append(f"  • {col}: min={df[col].min():,.1f}, max={df[col].max():,.1f}, avg={df[col].mean():,.1f}")
-                        except:
+                        except Exception:
                             continue
                     if stats_info:
                         parts.append("\n".join(stats_info))
@@ -351,7 +356,7 @@ async def geotab_get_results(chat_id: str, message_group_id: str, include_full_d
                             total = df[col].sum()
                             avg = df[col].mean()
                             stats_info.append(f"{col}: Total={total:,.0f}, Avg={avg:.1f}")
-                        except:
+                        except Exception:
                             continue
                     if stats_info:
                         parts.append(f"📊 **Quick Stats**: {'; '.join(stats_info)}")
@@ -606,7 +611,7 @@ async def geotab_query_duckdb(table_name: str, sql_query: str, limit: int = 1000
                 for col in numeric_cols:
                     try:
                         parts.append(f"• {col}: min={result_df[col].min():,.1f}, max={result_df[col].max():,.1f}, avg={result_df[col].mean():,.1f}, total={result_df[col].sum():,.1f}")
-                    except:
+                    except Exception:
                         continue
 
         # Show the original dataset info

@@ -6,6 +6,7 @@ This is extracted from geotab_mcp_server.py for easier testing and reusability.
 """
 
 import logging
+import re
 from datetime import datetime
 from typing import Dict, List, Tuple, Optional
 
@@ -23,11 +24,87 @@ class DuckDBManager:
     we load it into DuckDB and provide SQL query capabilities.
     """
 
+    # Regex for validating table names (alphanumeric and underscores only)
+    TABLE_NAME_PATTERN = re.compile(r'^ace_[a-zA-Z0-9_]+$')
+
+    # Regex for detecting LIMIT clause with word boundaries
+    LIMIT_PATTERN = re.compile(r'\bLIMIT\b', re.IGNORECASE)
+
+    # Dangerous SQL keywords that should not be allowed in queries
+    DANGEROUS_KEYWORDS = [
+        'DROP', 'DELETE', 'TRUNCATE', 'ALTER', 'CREATE',
+        'INSERT', 'UPDATE', 'GRANT', 'REVOKE'
+    ]
+
     def __init__(self):
         """Initialize in-memory DuckDB connection."""
         self.conn = duckdb.connect(":memory:")
         self.datasets: Dict[str, Dict] = {}  # Metadata about stored datasets
         logger.info("DuckDB manager initialized with in-memory database")
+
+    def _sanitize_identifier(self, value: str) -> str:
+        """
+        Sanitize an identifier (table name, column name) for safe SQL usage.
+
+        Args:
+            value: The identifier to sanitize
+
+        Returns:
+            Sanitized identifier safe for SQL queries
+
+        Raises:
+            ValueError: If identifier contains invalid characters
+        """
+        # Remove any characters that are not alphanumeric or underscore
+        sanitized = re.sub(r'[^a-zA-Z0-9_]', '_', value)
+
+        # Ensure it doesn't start with a number
+        if sanitized and sanitized[0].isdigit():
+            sanitized = '_' + sanitized
+
+        return sanitized
+
+    def _validate_table_name(self, table_name: str) -> None:
+        """
+        Validate that a table name is safe and follows expected format.
+
+        Args:
+            table_name: The table name to validate
+
+        Raises:
+            ValueError: If table name is invalid or potentially malicious
+        """
+        if not self.TABLE_NAME_PATTERN.match(table_name):
+            raise ValueError(
+                f"Invalid table name: '{table_name}'. "
+                f"Table names must match pattern: ace_[a-zA-Z0-9_]+"
+            )
+
+    def _validate_sql_query(self, sql: str) -> None:
+        """
+        Validate that a SQL query is safe for execution.
+
+        Only allows SELECT statements and blocks dangerous operations.
+
+        Args:
+            sql: The SQL query to validate
+
+        Raises:
+            ValueError: If query contains dangerous operations
+        """
+        # Convert to uppercase for case-insensitive checking
+        sql_upper = sql.upper().strip()
+
+        # Must start with SELECT
+        if not sql_upper.startswith('SELECT'):
+            raise ValueError("Only SELECT queries are allowed")
+
+        # Check for dangerous keywords
+        for keyword in self.DANGEROUS_KEYWORDS:
+            # Use word boundary to avoid false positives
+            pattern = re.compile(r'\b' + re.escape(keyword) + r'\b', re.IGNORECASE)
+            if pattern.search(sql):
+                raise ValueError(f"Dangerous SQL keyword detected: {keyword}")
 
     def store_dataframe(self, chat_id: str, message_group_id: str, df: pd.DataFrame,
                        question: str = "", sql_query: str = "") -> str:
@@ -43,11 +120,22 @@ class DuckDBManager:
 
         Returns:
             Table name where data is stored
+
+        Raises:
+            ValueError: If table name cannot be safely created
         """
+        # Sanitize identifiers to prevent SQL injection
+        safe_chat_id = self._sanitize_identifier(chat_id)
+        safe_msg_id = self._sanitize_identifier(message_group_id)
+
         # Create a clean table name
-        table_name = f"ace_{chat_id}_{message_group_id}".replace("-", "_")
+        table_name = f"ace_{safe_chat_id}_{safe_msg_id}"
+
+        # Validate the final table name
+        self._validate_table_name(table_name)
 
         # Store the DataFrame as a DuckDB table
+        # Using parameterized approach with pandas DataFrame directly
         self.conn.execute(f"CREATE OR REPLACE TABLE {table_name} AS SELECT * FROM df")
 
         # Store metadata
@@ -70,17 +158,26 @@ class DuckDBManager:
         """
         Execute a SQL query on stored datasets.
 
+        Only SELECT queries are allowed for safety. Dangerous operations
+        like DROP, DELETE, UPDATE are blocked.
+
         Args:
-            sql: SQL query to execute
+            sql: SQL query to execute (SELECT only)
             limit: Maximum rows to return (safety limit)
 
         Returns:
             Tuple of (DataFrame with results, metadata dict)
+
+        Raises:
+            ValueError: If query contains dangerous operations
         """
         try:
+            # Validate the SQL query for safety
+            self._validate_sql_query(sql)
+
             # Add LIMIT if not present for safety
-            sql_upper = sql.upper().strip()
-            if "LIMIT" not in sql_upper:
+            # Use word-boundary regex to avoid matching "UNLIMITED" or "limit" in strings
+            if not self.LIMIT_PATTERN.search(sql):
                 sql = f"{sql.strip().rstrip(';')} LIMIT {limit}"
 
             # Execute query
@@ -118,10 +215,26 @@ class DuckDBManager:
         return table_name in self.datasets
 
     def get_sample_data(self, table_name: str, limit: int = 10) -> pd.DataFrame:
-        """Get a sample of data from a table."""
+        """
+        Get a sample of data from a table.
+
+        Args:
+            table_name: Name of the table to sample
+            limit: Number of rows to return
+
+        Returns:
+            DataFrame with sample data
+
+        Raises:
+            ValueError: If table doesn't exist or name is invalid
+        """
         if not self.table_exists(table_name):
             raise ValueError(f"Table '{table_name}' not found")
 
+        # Validate table name before using in query
+        self._validate_table_name(table_name)
+
+        # Safe to use table_name in query after validation
         return self.conn.execute(f"SELECT * FROM {table_name} LIMIT {limit}").fetchdf()
 
     def cleanup_old_datasets(self, max_age_minutes: int = 60):
@@ -138,6 +251,8 @@ class DuckDBManager:
 
         for table_name in tables_to_remove:
             try:
+                # Validate table name before dropping
+                self._validate_table_name(table_name)
                 self.conn.execute(f"DROP TABLE IF EXISTS {table_name}")
                 del self.datasets[table_name]
                 logger.info(f"Cleaned up old dataset: {table_name}")

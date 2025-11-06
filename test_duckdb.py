@@ -8,7 +8,7 @@ Tests the DuckDB integration for caching large datasets from Ace queries.
 import sys
 import os
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # Import the DuckDB manager
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -342,7 +342,7 @@ def test_error_handling(manager):
     try:
         # Test nonexistent table
         try:
-            result_df, metadata = manager.query("SELECT * FROM nonexistent_table")
+            result_df, _metadata = manager.query("SELECT * FROM nonexistent_table")
             print("❌ Should have raised an error for nonexistent table")
             return False
         except Exception:
@@ -350,7 +350,7 @@ def test_error_handling(manager):
 
         # Test invalid SQL
         try:
-            result_df, metadata = manager.query("INVALID SQL QUERY")
+            result_df, _metadata = manager.query("INVALID SQL QUERY")
             print("❌ Should have raised an error for invalid SQL")
             return False
         except Exception:
@@ -360,6 +360,82 @@ def test_error_handling(manager):
         return True
     except Exception as e:
         print(f"❌ Error handling test failed: {e}")
+        raise
+
+
+def test_sql_injection_protection():
+    """Test SQL injection protection"""
+    print("\n=== Test 15: SQL Injection Protection ===")
+    try:
+        manager = DuckDBManager()
+
+        # Create a benign dataset
+        df = pd.DataFrame({'col1': [1, 2, 3], 'col2': ['a', 'b', 'c']})
+
+        # Test 1: Malicious chat_id with SQL injection attempt
+        print("Testing malicious chat_id with SQL injection...")
+        malicious_chat_id = "test'; DROP TABLE users; --"
+        table_name = manager.store_dataframe(
+            chat_id=malicious_chat_id,
+            message_group_id="safe_msg",
+            df=df
+        )
+        # Should have sanitized the table name - check it's safe (no SQL special chars)
+        assert "'" not in table_name, "Table name should not contain quotes"
+        assert ";" not in table_name, "Table name should not contain semicolons"
+        assert "--" not in table_name, "Table name should not contain comment markers"
+        assert table_name.startswith("ace_"), "Table name should start with ace_"
+        # Verify it matches the safe pattern
+        assert manager.TABLE_NAME_PATTERN.match(table_name), "Table name should match safe pattern"
+        print(f"✅ Malicious chat_id sanitized to: {table_name}")
+
+        # Test 2: Attempt DROP query
+        print("Testing DROP query prevention...")
+        try:
+            manager.query("DROP TABLE " + table_name)
+            print("❌ Should have blocked DROP query")
+            return False
+        except ValueError as e:
+            if "dangerous" in str(e).lower() or "only select" in str(e).lower():
+                print(f"✅ DROP query blocked: {e}")
+            else:
+                raise
+
+        # Test 3: Attempt DELETE query
+        print("Testing DELETE query prevention...")
+        try:
+            manager.query(f"DELETE FROM {table_name}")
+            print("❌ Should have blocked DELETE query")
+            return False
+        except ValueError as e:
+            if "dangerous" in str(e).lower() or "only select" in str(e).lower():
+                print(f"✅ DELETE query blocked: {e}")
+            else:
+                raise
+
+        # Test 4: Attempt UPDATE query
+        print("Testing UPDATE query prevention...")
+        try:
+            manager.query(f"UPDATE {table_name} SET col1 = 999")
+            print("❌ Should have blocked UPDATE query")
+            return False
+        except ValueError as e:
+            if "dangerous" in str(e).lower() or "only select" in str(e).lower():
+                print(f"✅ UPDATE query blocked: {e}")
+            else:
+                raise
+
+        # Test 5: Verify LIMIT bypass fix (should not match "UNLIMITED")
+        print("Testing LIMIT bypass protection...")
+        # This should add LIMIT because "UNLIMITED" is not the same as "LIMIT"
+        result_df, metadata = manager.query(f"SELECT * FROM {table_name} WHERE col2 != 'UNLIMITED'")
+        assert "LIMIT" in metadata['query_executed'].upper(), "Should have added LIMIT"
+        print(f"✅ LIMIT correctly added even with 'UNLIMITED' in query")
+
+        print("✅ SQL injection protection test passed")
+        return True
+    except Exception as e:
+        print(f"❌ SQL injection protection test failed: {e}")
         raise
 
 
@@ -425,6 +501,10 @@ def run_all_tests():
 
         # Test 14: Error Handling
         test_error_handling(manager)
+        tests_passed += 1
+
+        # Test 15: SQL Injection Protection
+        test_sql_injection_protection()
         tests_passed += 1
 
     except Exception as e:
