@@ -20,7 +20,7 @@ class DuckDBManager:
     """
     Manager for storing and querying large datasets in DuckDB.
 
-    When Ace returns large result sets (>1000 rows), instead of sending all data to Claude,
+    When Ace returns large result sets (>200 rows), instead of sending all data to Claude,
     we load it into DuckDB and provide SQL query capabilities.
     """
 

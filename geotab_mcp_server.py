@@ -278,13 +278,13 @@ async def geotab_get_results(chat_id: str, message_group_id: str, include_full_d
         if result.data_frame is not None and not result.data_frame.empty:
             df = result.data_frame
 
-            # For large datasets (>1000 rows), load into DuckDB instead of returning all data
+            # For large datasets (>200 rows), load into DuckDB instead of returning all data
             # Threshold rationale:
-            # - Claude can handle ~1000 rows efficiently in context
+            # - Claude can handle ~200 rows efficiently in context without overwhelming tokens
             # - Larger datasets overwhelm token limits and reduce analysis quality
             # - DuckDB enables SQL-based analysis which is more appropriate for large data
             # - Provides better UX by showing metadata + sample instead of flooding with data
-            DUCKDB_THRESHOLD = 1000
+            DUCKDB_THRESHOLD = 200
             if len(df) > DUCKDB_THRESHOLD:
                 # Store in DuckDB
                 db_manager = get_duckdb_manager()
@@ -552,7 +552,7 @@ async def geotab_query_duckdb(table_name: str, sql_query: str, limit: int = 1000
     """
     Execute a SQL query on a dataset cached in DuckDB.
 
-    When Ace returns large datasets (>1000 rows), they are automatically loaded into
+    When Ace returns large datasets (>200 rows), they are automatically loaded into
     DuckDB. Use this tool to run SQL queries and analyze the data.
 
     Args:
@@ -579,7 +579,7 @@ async def geotab_query_duckdb(table_name: str, sql_query: str, limit: int = 1000
                 table_list = "\n".join([f"• `{ds['table_name']}` ({ds['row_count']:,} rows)" for ds in available])
                 return f"Table '{table_name}' not found.\n\nAvailable tables:\n{table_list}\n\nUse geotab_list_cached_datasets() for more details."
             else:
-                return "No cached datasets available. Large datasets (>1000 rows) are automatically cached when retrieved from Ace."
+                return "No cached datasets available. Large datasets (>200 rows) are automatically cached when retrieved from Ace."
 
         logger.info(f"Executing DuckDB query on {table_name}: {sql_query[:100]}...")
 
@@ -645,8 +645,8 @@ async def geotab_list_cached_datasets() -> str:
         if not datasets:
             return """No cached datasets available.
 
-Large datasets (>1000 rows) from Ace queries are automatically cached in DuckDB.
-When you retrieve results with more than 1000 rows, they will appear here."""
+Large datasets (>200 rows) from Ace queries are automatically cached in DuckDB.
+When you retrieve results with more than 200 rows, they will appear here."""
 
         parts = [f"**Cached Datasets in DuckDB** ({len(datasets)} total)\n"]
 
