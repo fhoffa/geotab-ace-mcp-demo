@@ -42,6 +42,7 @@ class GeotabCredentials:
     username: str
     password: str
     database: str
+    api_url: Optional[str] = None
 
 
 @dataclass
@@ -83,6 +84,175 @@ class APIError(GeotabACEError):
 class TimeoutError(GeotabACEError):
     """Raised when operations timeout."""
     pass
+
+
+class AccountManager:
+    """
+    Manages multiple Geotab accounts for multi-tenant support.
+
+    Supports two configuration modes:
+    1. Legacy single account: GEOTAB_API_USERNAME, GEOTAB_API_PASSWORD, GEOTAB_API_DATABASE
+    2. Multi-account: GEOTAB_ACCOUNT_1_NAME, GEOTAB_ACCOUNT_1_USERNAME, etc.
+
+    Example .env for multi-account:
+        GEOTAB_ACCOUNT_1_NAME=fleet1
+        GEOTAB_ACCOUNT_1_USERNAME=user1@example.com
+        GEOTAB_ACCOUNT_1_PASSWORD=secret1
+        GEOTAB_ACCOUNT_1_DATABASE=db1
+        GEOTAB_ACCOUNT_1_API_URL=https://my.geotab.com/apiv1  # optional
+
+        GEOTAB_ACCOUNT_2_NAME=fleet2
+        GEOTAB_ACCOUNT_2_USERNAME=user2@example.com
+        GEOTAB_ACCOUNT_2_PASSWORD=secret2
+        GEOTAB_ACCOUNT_2_DATABASE=db2
+        GEOTAB_ACCOUNT_2_API_URL=https://mypreview.geotab.com/apiv1  # optional
+    """
+
+    def __init__(self):
+        """Initialize the account manager and load all configured accounts."""
+        self._clients: Dict[str, 'GeotabACEClient'] = {}
+        self._account_configs: Dict[str, GeotabCredentials] = {}
+        self._default_account: Optional[str] = None
+        self._load_accounts()
+
+    def _load_accounts(self) -> None:
+        """Load account configurations from environment variables."""
+        # First, try to load multi-account configuration
+        account_num = 1
+        while True:
+            prefix = f"GEOTAB_ACCOUNT_{account_num}_"
+            name = os.getenv(f"{prefix}NAME")
+            username = os.getenv(f"{prefix}USERNAME")
+            password = os.getenv(f"{prefix}PASSWORD")
+            database = os.getenv(f"{prefix}DATABASE")
+            api_url = os.getenv(f"{prefix}API_URL")
+
+            if not name:
+                # No more accounts
+                break
+
+            if not all([username, password, database]):
+                logger.warning(f"Incomplete configuration for account {account_num} ({name}). Skipping.")
+                account_num += 1
+                continue
+
+            self._account_configs[name] = GeotabCredentials(
+                username=username,
+                password=password,
+                database=database,
+                api_url=api_url
+            )
+
+            # First account becomes default
+            if self._default_account is None:
+                self._default_account = name
+
+            logger.info(f"Loaded account configuration: {name} (database: {database})")
+            account_num += 1
+
+        # If no multi-account config found, fall back to legacy single account
+        if not self._account_configs:
+            username = os.getenv("GEOTAB_API_USERNAME")
+            password = os.getenv("GEOTAB_API_PASSWORD")
+            database = os.getenv("GEOTAB_API_DATABASE")
+
+            if all([username, password, database]):
+                self._account_configs["default"] = GeotabCredentials(
+                    username=username,
+                    password=password,
+                    database=database
+                )
+                self._default_account = "default"
+                logger.info(f"Loaded legacy single account configuration (database: {database})")
+            else:
+                logger.warning("No account configuration found. Set environment variables to configure accounts.")
+
+    def get_client(self, account: Optional[str] = None) -> 'GeotabACEClient':
+        """
+        Get or create a GeotabACEClient for the specified account.
+
+        Args:
+            account: Account name. If None, uses the default account.
+
+        Returns:
+            GeotabACEClient instance for the account
+
+        Raises:
+            AuthenticationError: If account not found or not configured
+        """
+        if not self._account_configs:
+            raise AuthenticationError(
+                "No accounts configured. Set GEOTAB_ACCOUNT_1_NAME, GEOTAB_ACCOUNT_1_USERNAME, "
+                "GEOTAB_ACCOUNT_1_PASSWORD, GEOTAB_ACCOUNT_1_DATABASE environment variables, "
+                "or use legacy GEOTAB_API_USERNAME, GEOTAB_API_PASSWORD, GEOTAB_API_DATABASE."
+            )
+
+        # Use default account if none specified
+        account_name = account or self._default_account
+
+        if account_name not in self._account_configs:
+            available = list(self._account_configs.keys())
+            raise AuthenticationError(
+                f"Account '{account_name}' not found. Available accounts: {', '.join(available)}"
+            )
+
+        # Create client if not cached
+        if account_name not in self._clients:
+            credentials = self._account_configs[account_name]
+            self._clients[account_name] = GeotabACEClient(
+                credentials=credentials,
+                api_url=credentials.api_url
+            )
+            logger.debug(f"Created client for account: {account_name}")
+
+        return self._clients[account_name]
+
+    def list_accounts(self) -> List[Dict[str, str]]:
+        """
+        List all configured accounts.
+
+        Returns:
+            List of account info dictionaries with name, database, and is_default
+        """
+        accounts = []
+        for name, creds in self._account_configs.items():
+            accounts.append({
+                "name": name,
+                "database": creds.database,
+                "username": creds.username,
+                "is_default": name == self._default_account
+            })
+        return accounts
+
+    def get_default_account(self) -> Optional[str]:
+        """Get the name of the default account."""
+        return self._default_account
+
+    def set_default_account(self, account: str) -> None:
+        """
+        Set the default account.
+
+        Args:
+            account: Account name to set as default
+
+        Raises:
+            AuthenticationError: If account not found
+        """
+        if account not in self._account_configs:
+            available = list(self._account_configs.keys())
+            raise AuthenticationError(
+                f"Account '{account}' not found. Available accounts: {', '.join(available)}"
+            )
+        self._default_account = account
+        logger.info(f"Default account set to: {account}")
+
+    def has_accounts(self) -> bool:
+        """Check if any accounts are configured."""
+        return len(self._account_configs) > 0
+
+    def account_count(self) -> int:
+        """Get the number of configured accounts."""
+        return len(self._account_configs)
 
 
 class GeotabACEClient:

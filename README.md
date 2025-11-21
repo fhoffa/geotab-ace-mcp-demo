@@ -6,6 +6,7 @@ An MCP (Model Context Protocol) server that provides Claude with tools to intera
 
 ## Features
 
+- **Multi-Account Support**: Connect to multiple Geotab databases simultaneously
 - **Automatic Authentication**: Handles Geotab API authentication transparently
 - **Async Query Support**: Start long-running queries and check their progress
 - **Full Dataset Retrieval**: Downloads complete datasets when available
@@ -27,11 +28,25 @@ uv sync
 
 Create a `.env` file in the project directory:
 
+**Single Account:**
 ```env
 GEOTAB_API_USERNAME=your_username
 GEOTAB_API_PASSWORD=your_password
 GEOTAB_API_DATABASE=your_database_name
 # GEOTAB_API_URL=https://alpha.geotab.com/apiv1  # Optional: for alpha.geotab.com access
+```
+
+**Multiple Accounts:**
+```env
+GEOTAB_ACCOUNT_1_NAME=fleet1
+GEOTAB_ACCOUNT_1_USERNAME=user1@example.com
+GEOTAB_ACCOUNT_1_PASSWORD=secret1
+GEOTAB_ACCOUNT_1_DATABASE=db1
+
+GEOTAB_ACCOUNT_2_NAME=fleet2
+GEOTAB_ACCOUNT_2_USERNAME=user2@example.com
+GEOTAB_ACCOUNT_2_PASSWORD=secret2
+GEOTAB_ACCOUNT_2_DATABASE=db2
 ```
 
 ### 3. Test the Connection
@@ -109,6 +124,21 @@ List all datasets currently cached in DuckDB with their metadata, including row 
 
 **Example**: "Show me what datasets are cached in DuckDB"
 
+### `geotab_list_accounts`
+List all configured Geotab accounts. Shows which accounts are available and which is the default.
+
+**Example**: "List my Geotab accounts"
+
+### Multi-Account Usage
+
+All query tools accept an optional `account` parameter to specify which account to use:
+
+```
+Ask Geotab using fleet2: "How many vehicles do we have?"
+```
+
+If no account is specified, the default account is used (first account in multi-account setup, or "default" for single account).
+
 ## DuckDB Caching for Large Datasets
 
 When Ace returns datasets with more than 200 rows, instead of sending all that data to Claude, the MCP server:
@@ -163,6 +193,8 @@ Test my Geotab connection
 
 ### Environment Variables
 
+#### Single Account (Legacy)
+
 | Variable | Description | Required |
 |----------|-------------|----------|
 | `GEOTAB_API_USERNAME` | Your Geotab username | Yes |
@@ -170,6 +202,19 @@ Test my Geotab connection
 | `GEOTAB_API_DATABASE` | Your Geotab database name | Yes |
 | `GEOTAB_API_URL` | Geotab API endpoint URL (default: `https://my.geotab.com/apiv1`) | No |
 | `GEOTAB_DRIVER_PRIVACY_MODE` | Redact driver names in results (default: `true`) | No |
+
+#### Multiple Accounts
+
+Use numbered environment variables for each account:
+
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `GEOTAB_ACCOUNT_N_NAME` | Friendly name for the account (e.g., "fleet1") | Yes |
+| `GEOTAB_ACCOUNT_N_USERNAME` | Geotab username for account N | Yes |
+| `GEOTAB_ACCOUNT_N_PASSWORD` | Geotab password for account N | Yes |
+| `GEOTAB_ACCOUNT_N_DATABASE` | Geotab database name for account N | Yes |
+
+Where N is 1, 2, 3, etc. The first account (N=1) becomes the default.
 
 ### Driver Privacy Preserving Mode
 
