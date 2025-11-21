@@ -15,7 +15,7 @@ from typing import Optional
 
 from fastmcp import FastMCP
 from geotab_ace import (
-    GeotabACEClient, QueryStatus,
+    GeotabACEClient, QueryStatus, AccountManager,
     GeotabACEError, AuthenticationError, APIError, TimeoutError
 )
 from duckdb_manager import DuckDBManager
@@ -31,8 +31,8 @@ logger = logging.getLogger("geotab-mcp-server")
 # Create MCP server instance
 mcp = FastMCP("geotab-mcp-server")
 
-# Global client instance
-ace_client: Optional[GeotabACEClient] = None
+# Global account manager instance
+account_manager: Optional[AccountManager] = None
 
 # Global DuckDB manager instance
 duckdb_manager: Optional[DuckDBManager] = None
@@ -46,12 +46,17 @@ def get_duckdb_manager() -> DuckDBManager:
     return duckdb_manager
 
 
-def get_ace_client() -> GeotabACEClient:
-    """Get or create the ACE client instance."""
-    global ace_client
-    if ace_client is None:
-        ace_client = GeotabACEClient()
-    return ace_client
+def get_account_manager() -> AccountManager:
+    """Get or create the account manager instance."""
+    global account_manager
+    if account_manager is None:
+        account_manager = AccountManager()
+    return account_manager
+
+
+def get_ace_client(account: Optional[str] = None) -> GeotabACEClient:
+    """Get or create the ACE client instance for the specified account."""
+    return get_account_manager().get_client(account)
 
 
 def format_query_result(result, chat_id: str = "", message_group_id: str = "") -> str:
@@ -106,27 +111,28 @@ def format_query_result(result, chat_id: str = "", message_group_id: str = "") -
 
 
 @mcp.tool()
-async def geotab_ask_question(question: str, timeout_seconds: int = 60) -> str:
+async def geotab_ask_question(question: str, timeout_seconds: int = 60, account: Optional[str] = None) -> str:
     """
     Ask a question to Geotab ACE AI and wait for the response.
-    
+
     Args:
         question (str): The question to ask the Geotab AI service
         timeout_seconds (int): Maximum time to wait for response (default: 60 seconds)
-        
+        account (str, optional): Account name to use. If not specified, uses default account.
+
     Returns:
         str: The response from Geotab AI, including SQL query, analysis, and data
     """
     try:
         if not question or not question.strip():
             return "❌ Error: Question cannot be empty"
-            
+
         if len(question) > 10000:
             return "❌ Error: Question too long (max 10,000 characters)"
-            
-        logger.info(f"Asking question (timeout: {timeout_seconds}s): {question[:100]}...")
-        
-        client = get_ace_client()
+
+        logger.info(f"Asking question (timeout: {timeout_seconds}s, account: {account or 'default'}): {question[:100]}...")
+
+        client = get_ace_client(account)
         
         # Start the query
         chat_id, message_group_id = await client.start_query(question.strip())
@@ -170,24 +176,25 @@ async def geotab_ask_question(question: str, timeout_seconds: int = 60) -> str:
 
 
 @mcp.tool()
-async def geotab_check_status(chat_id: str, message_group_id: str) -> str:
+async def geotab_check_status(chat_id: str, message_group_id: str, account: Optional[str] = None) -> str:
     """
     Check the status of a running Geotab query.
-    
+
     Args:
         chat_id (str): Chat ID from a previous question
         message_group_id (str): Message group ID from a previous question
-        
+        account (str, optional): Account name to use. If not specified, uses default account.
+
     Returns:
         str: Current status of the query with any available partial results
     """
     try:
         if not chat_id or not message_group_id:
             return "❌ Error: Both chat_id and message_group_id are required"
-            
+
         logger.debug(f"Checking status for {chat_id}/{message_group_id}")
-        
-        client = get_ace_client()
+
+        client = get_ace_client(account)
         result = await client.get_query_status(chat_id, message_group_id)
         
         response = format_query_result(result, chat_id, message_group_id)
@@ -208,25 +215,26 @@ async def geotab_check_status(chat_id: str, message_group_id: str) -> str:
 
 
 @mcp.tool()
-async def geotab_get_results(chat_id: str, message_group_id: str, include_full_data: bool = True) -> str:
+async def geotab_get_results(chat_id: str, message_group_id: str, include_full_data: bool = True, account: Optional[str] = None) -> str:
     """
     Get the complete results from a completed Geotab query.
-    
+
     Args:
         chat_id (str): Chat ID from a previous question
         message_group_id (str): Message group ID from a previous question
         include_full_data (bool): Whether to download the full dataset (default: True)
-        
+        account (str, optional): Account name to use. If not specified, uses default account.
+
     Returns:
         str: Complete results including SQL query, analysis, and full dataset
     """
     try:
         if not chat_id or not message_group_id:
             return "❌ Error: Both chat_id and message_group_id are required"
-            
+
         logger.info(f"Getting results for {chat_id}/{message_group_id} (full_data={include_full_data})")
-        
-        client = get_ace_client()
+
+        client = get_ace_client(account)
         result = await client.get_query_status(chat_id, message_group_id)
         
         if result.status != QueryStatus.DONE:
@@ -377,27 +385,28 @@ async def geotab_get_results(chat_id: str, message_group_id: str, include_full_d
 
 
 @mcp.tool()
-async def geotab_start_query_async(question: str) -> str:
+async def geotab_start_query_async(question: str, account: Optional[str] = None) -> str:
     """
     Start a Geotab query asynchronously and return tracking IDs immediately.
     Use this for complex queries that need extended processing time.
-    
+
     Args:
         question (str): The question to ask the Geotab AI service
-        
+        account (str, optional): Account name to use. If not specified, uses default account.
+
     Returns:
         str: Tracking information for the started query
     """
     try:
         if not question or not question.strip():
             return "❌ Error: Question cannot be empty"
-            
+
         if len(question) > 50000:
             return "❌ Error: Question too long (max 50,000 characters)"
-            
-        logger.info(f"Starting async query: {question[:100]}...")
-        
-        client = get_ace_client()
+
+        logger.info(f"Starting async query (account: {account or 'default'}): {question[:100]}...")
+
+        client = get_ace_client(account)
         chat_id, message_group_id = await client.start_query(question.strip())
         
         return f"""🚀 **Query Started Successfully**
@@ -425,18 +434,21 @@ async def geotab_start_query_async(question: str) -> str:
 
 
 @mcp.tool()
-async def geotab_test_connection() -> str:
+async def geotab_test_connection(account: Optional[str] = None) -> str:
     """
     Test the connection to Geotab API and verify authentication.
     Use this to diagnose connection issues.
-    
+
+    Args:
+        account (str, optional): Account name to test. If not specified, uses default account.
+
     Returns:
         str: Connection test results and diagnostic information
     """
     try:
-        logger.info("Testing Geotab connection...")
-        
-        client = get_ace_client()
+        logger.info(f"Testing Geotab connection (account: {account or 'default'})...")
+
+        client = get_ace_client(account)
         test_result = await client.test_connection()
         
         parts = ["🔧 **Connection Test Results**"]
@@ -513,14 +525,15 @@ export GEOTAB_API_DATABASE="your_database"
 
 
 @mcp.tool()
-async def geotab_debug_query(chat_id: str, message_group_id: str) -> str:
+async def geotab_debug_query(chat_id: str, message_group_id: str, account: Optional[str] = None) -> str:
     """
     Debug function to see raw response data and detailed extraction info from a query.
-    
+
     Args:
         chat_id (str): Chat ID from a previous question
         message_group_id (str): Message group ID from a previous question
-        
+        account (str, optional): Account name to use. If not specified, uses default account.
+
     Returns:
         str: Raw debug information about the query response and data extraction
     """
@@ -530,7 +543,7 @@ async def geotab_debug_query(chat_id: str, message_group_id: str) -> str:
 
         logger.info(f"Debug query for {chat_id}/{message_group_id}")
 
-        client = get_ace_client()
+        client = get_ace_client(account)
         result = await client.get_query_status(chat_id, message_group_id)
 
         # Return the full raw API response as formatted JSON
@@ -673,11 +686,69 @@ When you retrieve results with more than 200 rows, they will appear here."""
         return f"Error listing datasets: {str(e)}"
 
 
+@mcp.tool()
+async def geotab_list_accounts() -> str:
+    """
+    List all configured Geotab accounts.
+
+    Shows all accounts available for querying, including which one is the default.
+    Use the account name with other tools to query specific accounts.
+
+    Returns:
+        str: List of configured accounts with their details
+    """
+    try:
+        mgr = get_account_manager()
+        accounts = mgr.list_accounts()
+
+        if not accounts:
+            return """No Geotab accounts configured.
+
+**Single Account Setup** (legacy):
+```env
+GEOTAB_API_USERNAME=your_username
+GEOTAB_API_PASSWORD=your_password
+GEOTAB_API_DATABASE=your_database
+```
+
+**Multi-Account Setup**:
+```env
+GEOTAB_ACCOUNT_1_NAME=fleet1
+GEOTAB_ACCOUNT_1_USERNAME=user1@example.com
+GEOTAB_ACCOUNT_1_PASSWORD=secret1
+GEOTAB_ACCOUNT_1_DATABASE=db1
+
+GEOTAB_ACCOUNT_2_NAME=fleet2
+GEOTAB_ACCOUNT_2_USERNAME=user2@example.com
+GEOTAB_ACCOUNT_2_PASSWORD=secret2
+GEOTAB_ACCOUNT_2_DATABASE=db2
+```"""
+
+        parts = [f"**Configured Geotab Accounts** ({len(accounts)} total)\n"]
+
+        for acc in accounts:
+            default_marker = " (default)" if acc["is_default"] else ""
+            parts.append(f"**{acc['name']}**{default_marker}")
+            parts.append(f"• Database: `{acc['database']}`")
+            parts.append(f"• Username: `{acc['username']}`")
+            parts.append("")
+
+        parts.append("**Usage:**")
+        parts.append("Pass the account name to any tool using the `account` parameter.")
+        parts.append(f"Example: `geotab_ask_question('How many vehicles?', account='{accounts[0]['name']}')`")
+
+        return "\n".join(parts)
+
+    except Exception as e:
+        logger.error(f"Error listing accounts: {e}")
+        return f"Error listing accounts: {str(e)}"
+
+
 @mcp.resource("geotab://status")
 def get_server_status():
     """Get current server status and capability information."""
     try:
-        global ace_client, duckdb_manager
+        global account_manager, duckdb_manager
         db_info = {}
         if duckdb_manager is not None:
             datasets = duckdb_manager.list_datasets()
@@ -689,13 +760,26 @@ def get_server_status():
         else:
             db_info = {"duckdb_enabled": False}
 
+        # Account info
+        account_info = {}
+        if account_manager is not None:
+            accounts = account_manager.list_accounts()
+            account_info = {
+                "accounts_configured": len(accounts),
+                "default_account": account_manager.get_default_account(),
+                "account_names": [a["name"] for a in accounts]
+            }
+        else:
+            account_info = {"accounts_configured": 0}
+
         return {
             "server": "geotab-mcp-server",
-            "version": "3.0-duckdb",
+            "version": "4.0-multi-account",
             "status": "running",
-            "client_initialized": ace_client is not None,
+            **account_info,
             **db_info,
             "features": [
+                "Multi-account support",
                 "SQL query extraction",
                 "Enhanced reasoning capture",
                 "Full dataset download",
@@ -712,7 +796,8 @@ def get_server_status():
                 "geotab_test_connection",
                 "geotab_debug_query",
                 "geotab_query_duckdb",
-                "geotab_list_cached_datasets"
+                "geotab_list_cached_datasets",
+                "geotab_list_accounts"
             ]
         }
     except Exception as e:
@@ -726,21 +811,29 @@ def get_server_status():
 def main():
     """Main function to run the MCP server."""
     try:
-        logger.info("Starting Enhanced Geotab MCP Server...")
+        logger.info("Starting Enhanced Geotab MCP Server with Multi-Account Support...")
         logger.info(f"Python version: {sys.version}")
-        
-        # Test if we can create a client (this will validate env vars)
+
+        # Test if we can create the account manager (this will validate env vars)
         try:
-            test_client = GeotabACEClient()
-            logger.info("✅ Client initialization successful")
+            mgr = get_account_manager()
+            if mgr.has_accounts():
+                accounts = mgr.list_accounts()
+                logger.info(f"✅ Account manager initialized with {len(accounts)} account(s)")
+                for acc in accounts:
+                    default_marker = " (default)" if acc["is_default"] else ""
+                    logger.info(f"   • {acc['name']}: {acc['database']}{default_marker}")
+            else:
+                logger.warning("⚠️ No accounts configured")
+                logger.warning("Server will start but authentication will fail until environment variables are set")
         except AuthenticationError as e:
-            logger.warning(f"⚠️ Client initialization failed: {e}")
+            logger.warning(f"⚠️ Account manager initialization failed: {e}")
             logger.warning("Server will start but authentication will fail until environment variables are set")
         except Exception as e:
-            logger.error(f"❌ Unexpected error during client initialization: {e}")
-        
+            logger.error(f"❌ Unexpected error during account manager initialization: {e}")
+
         # Run the MCP server
-        logger.info("🚀 Enhanced MCP Server starting with SQL extraction and full data support...")
+        logger.info("🚀 MCP Server starting with multi-account support...")
         mcp.run()
         
     except KeyboardInterrupt:
