@@ -42,6 +42,7 @@ class GeotabCredentials:
     username: str
     password: str
     database: str
+    api_url: Optional[str] = None
 
 
 @dataclass
@@ -98,11 +99,13 @@ class AccountManager:
         GEOTAB_ACCOUNT_1_USERNAME=user1@example.com
         GEOTAB_ACCOUNT_1_PASSWORD=secret1
         GEOTAB_ACCOUNT_1_DATABASE=db1
+        GEOTAB_ACCOUNT_1_API_URL=https://my.geotab.com/apiv1  # optional
 
         GEOTAB_ACCOUNT_2_NAME=fleet2
         GEOTAB_ACCOUNT_2_USERNAME=user2@example.com
         GEOTAB_ACCOUNT_2_PASSWORD=secret2
         GEOTAB_ACCOUNT_2_DATABASE=db2
+        GEOTAB_ACCOUNT_2_API_URL=https://mypreview.geotab.com/apiv1  # optional
     """
 
     def __init__(self):
@@ -122,6 +125,7 @@ class AccountManager:
             username = os.getenv(f"{prefix}USERNAME")
             password = os.getenv(f"{prefix}PASSWORD")
             database = os.getenv(f"{prefix}DATABASE")
+            api_url = os.getenv(f"{prefix}API_URL")
 
             if not name:
                 # No more accounts
@@ -135,7 +139,8 @@ class AccountManager:
             self._account_configs[name] = GeotabCredentials(
                 username=username,
                 password=password,
-                database=database
+                database=database,
+                api_url=api_url
             )
 
             # First account becomes default
@@ -194,7 +199,10 @@ class AccountManager:
         # Create client if not cached
         if account_name not in self._clients:
             credentials = self._account_configs[account_name]
-            self._clients[account_name] = GeotabACEClient(credentials=credentials)
+            self._clients[account_name] = GeotabACEClient(
+                credentials=credentials,
+                api_url=credentials.api_url
+            )
             logger.debug(f"Created client for account: {account_name}")
 
         return self._clients[account_name]
