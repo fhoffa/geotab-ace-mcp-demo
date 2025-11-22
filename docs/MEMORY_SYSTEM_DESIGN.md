@@ -436,6 +436,55 @@ Claude: I figured out this error - it happens when...
 
 ---
 
+## Architectural Refinements (Post-Review)
+
+### A. Resource Endpoint for Context
+
+Add MCP Resource `geotab://memory/context` alongside the `get_context` tool.
+
+**Why:** If client supports resource attachment, Claude starts with context already loaded—no initial tool round-trip needed.
+
+### B. Enhanced Schema
+
+```sql
+CREATE TABLE memories (
+    id TEXT PRIMARY KEY,
+    content TEXT NOT NULL,
+    category TEXT NOT NULL,
+    tags TEXT,  -- JSON array
+    account TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_verified TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    usage_count INTEGER DEFAULT 0  -- Track which memories are useful
+);
+```
+
+- `usage_count`: Incremented on recall. Memories with count=0 after months are candidates for pruning.
+
+### C. System Prompt Injection
+
+To mitigate "Claude forgets to remember", add to MCP server instructions:
+
+> "You have access to a persistent memory system. You are **required** to check this memory (`geotab_recall`) before constructing complex queries. You are **required** to save (`geotab_remember`) any API anomalies, schema quirks, or successful patterns you discover for future use."
+
+---
+
+## Answered Open Questions
+
+1. **Should `get_context` run automatically?**
+   - **No** as a tool call. Use MCP Resource pattern—attach `geotab://memory/context` so context loads automatically.
+
+2. **Should we track which memories are useful?**
+   - **Yes.** Add `usage_count` column, increment on recall.
+
+3. **Should memories be exportable?**
+   - **Yes.** DuckDB makes this trivial: `COPY (SELECT * FROM memories) TO 'export.json'`. Add `geotab_export_memories` tool later.
+
+4. **Per-user vs shared?**
+   - **Single user for V1.** Multi-user needs locking/privacy solutions. Keep local (`~/.geotab_mcp_memories.db`).
+
+---
+
 ## Decision
 
 Proceeding with **Alternative 4 (Hybrid)** - rich storage with simple interface.
@@ -443,5 +492,7 @@ Proceeding with **Alternative 4 (Hybrid)** - rich storage with simple interface.
 Key characteristics:
 - DuckDB storage at `~/.geotab_mcp_memories.db`
 - 6 tools: remember, recall, get_context, list_memories, update_memory, forget
+- 1 resource: `geotab://memory/context`
 - Categories: gotcha, pattern, schema, account-info, error-resolution, performance
 - Full-text search + category/account/tag filtering
+- Usage tracking for memory relevance
