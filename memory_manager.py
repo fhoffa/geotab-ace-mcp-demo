@@ -536,6 +536,57 @@ class MemoryManager:
 
         return "\n".join(parts)
 
+    def export_memories(self, file_path: str = None) -> str:
+        """
+        Export all memories to a JSON file.
+
+        Args:
+            file_path: Path to export file. Defaults to ~/geotab_memories_export.json
+
+        Returns:
+            Path to the exported file
+        """
+        if file_path is None:
+            file_path = os.path.expanduser("~/geotab_memories_export.json")
+
+        # Get all memories with full data
+        results = self.conn.execute("""
+            SELECT id, content, category, tags, account,
+                   created_at, last_verified, usage_count
+            FROM memories
+            ORDER BY created_at DESC
+        """).fetchall()
+
+        memories = []
+        for row in results:
+            try:
+                tags = json.loads(row[3]) if row[3] else []
+            except json.JSONDecodeError:
+                tags = []
+
+            memories.append({
+                "id": row[0],
+                "content": row[1],
+                "category": row[2],
+                "tags": tags,
+                "account": row[4],
+                "created_at": row[5].isoformat() if row[5] else None,
+                "last_verified": row[6].isoformat() if row[6] else None,
+                "usage_count": row[7]
+            })
+
+        export_data = {
+            "exported_at": datetime.now().isoformat(),
+            "total_memories": len(memories),
+            "memories": memories
+        }
+
+        with open(file_path, 'w') as f:
+            json.dump(export_data, f, indent=2)
+
+        logger.info(f"Exported {len(memories)} memories to {file_path}")
+        return file_path
+
     def close(self):
         """Close the database connection."""
         if self.conn:

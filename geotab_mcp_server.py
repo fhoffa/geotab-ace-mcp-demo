@@ -29,8 +29,26 @@ logging.basicConfig(
 )
 logger = logging.getLogger("geotab-mcp-server")
 
-# Create MCP server instance
-mcp = FastMCP("geotab-mcp-server")
+# Create MCP server instance with memory system instructions
+mcp = FastMCP(
+    "geotab-mcp-server",
+    instructions="""You have access to a persistent memory system for Geotab learnings.
+
+**Required behaviors:**
+- Before constructing complex queries, check memory with `geotab_recall` for relevant patterns or gotchas
+- After discovering API quirks, schema details, or useful patterns, save them with `geotab_remember`
+- At session start, use `geotab_get_memory_context` to load relevant context
+
+**What to remember:**
+- gotcha: Unexpected API behaviors, quirks
+- pattern: Successful query patterns to reuse
+- schema: Table/column information discovered
+- account-info: Fleet characteristics (size, timezone, data range)
+- error-resolution: How errors were resolved
+- performance: Slow vs fast query patterns
+
+This memory persists across sessions and helps avoid re-learning the same lessons."""
+)
 
 # Global account manager instance
 account_manager: Optional[AccountManager] = None
@@ -1010,6 +1028,35 @@ async def geotab_forget(memory_id: str) -> str:
         return f"Error deleting memory: {e}"
 
 
+@mcp.tool()
+async def geotab_export_memories(file_path: str = None) -> str:
+    """
+    Export all memories to a JSON file for backup or sharing.
+
+    Args:
+        file_path (str, optional): Path to export file.
+            Defaults to ~/geotab_memories_export.json
+
+    Returns:
+        str: Path to exported file and summary
+    """
+    try:
+        mgr = get_memory_manager()
+        export_path = mgr.export_memories(file_path)
+        stats = mgr.get_stats()
+
+        return f"""Exported {stats['total_memories']} memories to:
+{export_path}
+
+Categories: {', '.join(f"{k}({v})" for k, v in stats['by_category'].items())}
+
+You can share this file or import it into another instance."""
+
+    except Exception as e:
+        logger.error(f"Error exporting memories: {e}")
+        return f"Error exporting memories: {e}"
+
+
 # =============================================================================
 # Resources
 # =============================================================================
@@ -1089,7 +1136,8 @@ def get_server_status():
                 "geotab_get_memory_context",
                 "geotab_list_memories",
                 "geotab_update_memory",
-                "geotab_forget"
+                "geotab_forget",
+                "geotab_export_memories"
             ]
         }
     except Exception as e:
