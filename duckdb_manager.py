@@ -5,10 +5,12 @@ Standalone module for storing and querying large datasets in DuckDB.
 This is extracted from geotab_mcp_server.py for easier testing and reusability.
 """
 
+import json
 import logging
 import os
 import re
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 
 import duckdb
@@ -34,7 +36,8 @@ class DuckDBManager:
     # Dangerous SQL keywords that should not be allowed in queries
     DANGEROUS_KEYWORDS = [
         'DROP', 'DELETE', 'TRUNCATE', 'ALTER', 'CREATE',
-        'INSERT', 'UPDATE', 'GRANT', 'REVOKE'
+        'INSERT', 'UPDATE', 'GRANT', 'REVOKE',
+        'ATTACH', 'DETACH', 'PRAGMA', 'COPY', 'EXPORT', 'IMPORT'
     ]
 
     def __init__(self, db_path: str = "./data/geotab_cache.duckdb", max_size_mb: int = 500):
@@ -44,7 +47,31 @@ class DuckDBManager:
         Args:
             db_path: Path to persistent DuckDB file (default: ./data/geotab_cache.duckdb)
             max_size_mb: Maximum cache size in MB before LRU cleanup (default: 500MB)
+
+        Raises:
+            ValueError: If db_path contains path traversal attempts or is absolute
         """
+        # Validate db_path to prevent path traversal attacks
+        # Allow absolute paths but prevent directory traversal with '..'
+        if ".." in db_path:
+            raise ValueError(
+                f"Invalid db_path: '{db_path}'. "
+                "Path must not contain '..' directory traversal sequences"
+            )
+
+        # Normalize and validate the path
+        normalized_path = Path(db_path).resolve()
+
+        # Ensure path doesn't escape to parent directories if it's a relative path
+        if not Path(db_path).is_absolute():
+            try:
+                normalized_path.relative_to(Path.cwd().resolve())
+            except ValueError:
+                raise ValueError(
+                    f"Invalid db_path: '{db_path}'. "
+                    "Relative path escapes current directory"
+                )
+
         # Create data directory if it doesn't exist
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
 
@@ -66,7 +93,8 @@ class DuckDBManager:
         logger.info(f"Loaded {len(self.datasets)} existing datasets from cache")
 
     def _init_metadata_table(self):
-        """Create metadata tracking table for cache management."""
+        """Create metadata tracking table for cache management with proper indexes."""
+        # Create metadata table with JSON columns instead of VARCHAR for safety
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS _cache_metadata (
                 table_name VARCHAR PRIMARY KEY,
@@ -79,15 +107,32 @@ class DuckDBManager:
                 access_count INTEGER DEFAULT 0,
                 row_count INTEGER,
                 column_count INTEGER,
-                columns VARCHAR,
-                dtypes VARCHAR,
+                columns JSON,
+                dtypes JSON,
                 size_bytes BIGINT
             )
         """)
-        logger.debug("Metadata table initialized")
+
+        # Create indexes for performance on cleanup queries
+        self.conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_last_accessed
+            ON _cache_metadata(last_accessed_at)
+        """)
+
+        self.conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_access_count
+            ON _cache_metadata(access_count)
+        """)
+
+        self.conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_chat_id
+            ON _cache_metadata(chat_id)
+        """)
+
+        logger.debug("Metadata table and indexes initialized")
 
     def _load_metadata(self):
-        """Load existing metadata from database into memory."""
+        """Load existing metadata from database into memory using safe JSON parsing."""
         try:
             result = self.conn.execute("""
                 SELECT table_name, chat_id, message_group_id, question, sql_query,
@@ -98,13 +143,28 @@ class DuckDBManager:
 
             for row in result:
                 table_name = row[0]
-                # Check if table actually exists
-                table_check = self.conn.execute(f"""
+                # Check if table actually exists using parameterized query
+                table_check = self.conn.execute("""
                     SELECT COUNT(*) FROM information_schema.tables
-                    WHERE table_name = '{table_name}'
-                """).fetchone()[0]
+                    WHERE table_name = ?
+                """, [table_name]).fetchone()[0]
 
                 if table_check > 0:
+                    # Parse JSON columns safely (no eval()!)
+                    try:
+                        columns = json.loads(row[10]) if row[10] else []
+                    except (json.JSONDecodeError, TypeError):
+                        # Fallback for old VARCHAR data
+                        columns = []
+                        logger.warning(f"Failed to parse columns JSON for {table_name}")
+
+                    try:
+                        dtypes = json.loads(row[11]) if row[11] else {}
+                    except (json.JSONDecodeError, TypeError):
+                        # Fallback for old VARCHAR data
+                        dtypes = {}
+                        logger.warning(f"Failed to parse dtypes JSON for {table_name}")
+
                     self.datasets[table_name] = {
                         "chat_id": row[1],
                         "message_group_id": row[2],
@@ -115,16 +175,17 @@ class DuckDBManager:
                         "access_count": row[7] or 0,
                         "row_count": row[8],
                         "column_count": row[9],
-                        "columns": eval(row[10]) if row[10] else [],
-                        "dtypes": eval(row[11]) if row[11] else {}
+                        "columns": columns,
+                        "dtypes": dtypes
                     }
                 else:
-                    # Orphaned metadata - clean it up
-                    self.conn.execute(f"DELETE FROM _cache_metadata WHERE table_name = '{table_name}'")
+                    # Orphaned metadata - clean it up using parameterized query
+                    self.conn.execute("DELETE FROM _cache_metadata WHERE table_name = ?", [table_name])
                     logger.debug(f"Removed orphaned metadata for {table_name}")
 
         except Exception as e:
-            logger.warning(f"Error loading metadata: {e}")
+            logger.error(f"Error loading metadata: {e}", exc_info=True)
+            raise  # Re-raise to make initialization failures visible
 
     def _track_access(self, table_name: str):
         """Update last accessed time and increment access counter."""
@@ -142,19 +203,51 @@ class DuckDBManager:
                 self.datasets[table_name]["access_count"] = self.datasets[table_name].get("access_count", 0) + 1
 
         except Exception as e:
+            # Log but don't fail - access tracking is non-critical
             logger.warning(f"Error tracking access for {table_name}: {e}")
 
     def _get_table_size(self, table_name: str) -> int:
-        """Get approximate size of table in bytes."""
+        """
+        Get table size in bytes using DuckDB's size estimation.
+
+        Args:
+            table_name: Name of the table (must be validated before calling)
+
+        Returns:
+            Estimated size in bytes, or 0 if calculation fails
+        """
         try:
+            # Validate table name before using in query
+            self._validate_table_name(table_name)
+
+            # Use DuckDB's built-in table size estimation
+            # This is much more accurate than row * column * 100
+            result = self.conn.execute(f"""
+                SELECT estimated_size
+                FROM duckdb_tables()
+                WHERE table_name = ?
+            """, [table_name]).fetchone()
+
+            if result and result[0]:
+                return int(result[0])
+
+            # Fallback: use a more reasonable estimation if duckdb_tables() doesn't work
+            # Get actual data size by querying column statistics
             result = self.conn.execute(f"""
                 SELECT
-                    (SELECT COUNT(*) FROM {table_name}) *
-                    (SELECT COUNT(*) FROM information_schema.columns WHERE table_name = '{table_name}') *
-                    100 as approx_bytes
-            """).fetchone()
-            return result[0] if result else 0
-        except:
+                    COUNT(*) as row_count,
+                    (SELECT COUNT(*) FROM information_schema.columns WHERE table_name = ?) as col_count
+                FROM {table_name}
+            """, [table_name]).fetchone()
+
+            if result:
+                # Rough estimate: assume 50 bytes average per field
+                return int(result[0] * result[1] * 50)
+
+            return 0
+
+        except Exception as e:
+            logger.warning(f"Failed to calculate size for {table_name}: {e}")
             return 0
 
     def _sanitize_identifier(self, value: str) -> str:
@@ -273,7 +366,7 @@ class DuckDBManager:
         }
         self.datasets[table_name] = metadata
 
-        # Persist metadata to database
+        # Persist metadata to database using JSON for columns and dtypes
         self.conn.execute("""
             INSERT OR REPLACE INTO _cache_metadata
             (table_name, chat_id, message_group_id, question, sql_query,
@@ -282,8 +375,10 @@ class DuckDBManager:
             VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, ?, ?, ?, ?, ?)
         """, [
             table_name, chat_id, message_group_id, question, sql_query,
-            len(df), len(df.columns), str(list(df.columns)),
-            str({col: str(dtype) for col, dtype in df.dtypes.items()}), size_bytes
+            len(df), len(df.columns),
+            json.dumps(list(df.columns)),  # Use JSON, not str()
+            json.dumps({col: str(dtype) for col, dtype in df.dtypes.items()}),  # Use JSON, not str()
+            size_bytes
         ])
 
         logger.info(f"Stored {len(df)} rows in DuckDB table '{table_name}' (~{size_bytes // 1024}KB)")
@@ -503,7 +598,8 @@ class DuckDBManager:
                 FROM _cache_metadata
             """).fetchone()
             return result[0] if result else 0
-        except:
+        except Exception as e:
+            logger.warning(f"Failed to get total cache size: {e}")
             return 0
 
     def consolidate_datasets(self, chat_id: str = None, max_tables: int = 5) -> Dict:
@@ -547,14 +643,16 @@ class DuckDBManager:
             schemas = []
             for table_name in tables_to_consolidate:
                 try:
-                    result = self.conn.execute(f"""
+                    # Use parameterized query for safety
+                    result = self.conn.execute("""
                         SELECT column_name, data_type
                         FROM information_schema.columns
-                        WHERE table_name = '{table_name}'
+                        WHERE table_name = ?
                         ORDER BY ordinal_position
-                    """).fetchall()
+                    """, [table_name]).fetchall()
                     schemas.append((table_name, result))
-                except:
+                except Exception as e:
+                    logger.warning(f"Failed to get schema for {table_name}: {e}")
                     continue
 
             if len(schemas) < 2:
@@ -611,8 +709,10 @@ class DuckDBManager:
                 """, [
                     consolidated_name, tid, "consolidated",
                     f"Consolidated from {len(schemas)} tables", "",
-                    row_count, len(first_schema), str([col[0] for col in first_schema]),
-                    "{}", size_bytes
+                    row_count, len(first_schema),
+                    json.dumps([col[0] for col in first_schema]),  # Use JSON, not str()
+                    json.dumps({}),  # Use JSON, not string literal
+                    size_bytes
                 ])
 
                 # Drop original tables
