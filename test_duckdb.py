@@ -9,22 +9,40 @@ import sys
 import os
 import pandas as pd
 from datetime import datetime
+import tempfile
+import shutil
 
 # Import the DuckDB manager
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from duckdb_manager import DuckDBManager
 
 
+def get_test_db_path():
+    """Create a temporary directory for test database"""
+    test_dir = tempfile.mkdtemp(prefix="duckdb_test_")
+    return os.path.join(test_dir, "test_cache.duckdb")
+
+
+def cleanup_test_db(db_path):
+    """Clean up test database directory"""
+    test_dir = os.path.dirname(db_path)
+    if os.path.exists(test_dir):
+        shutil.rmtree(test_dir)
+
+
 def test_initialization():
     """Test DuckDB manager initialization"""
     print("=== Test 1: Initialization ===")
     try:
-        manager = DuckDBManager()
+        # Use a test database path instead of default
+        test_db_path = get_test_db_path()
+        manager = DuckDBManager(db_path=test_db_path, max_size_mb=100)
+
         assert manager.conn is not None, "Connection should be initialized"
         assert isinstance(manager.datasets, dict), "Datasets should be a dict"
-        assert len(manager.datasets) == 0, "Should start with no datasets"
+        assert os.path.exists(test_db_path), "Database file should be created"
         print("✅ Initialization test passed")
-        return manager
+        return manager, test_db_path
     except Exception as e:
         print(f"❌ Initialization test failed: {e}")
         raise
@@ -290,8 +308,10 @@ def test_multiple_datasets(manager):
 def test_large_dataset():
     """Test with a large dataset (>1000 rows) to simulate real usage"""
     print("\n=== Test 13: Large Dataset ===")
+    test_db_path = None
     try:
-        manager = DuckDBManager()
+        test_db_path = get_test_db_path()
+        manager = DuckDBManager(db_path=test_db_path, max_size_mb=100)
 
         # Create large DataFrame (simulating Ace returning 5000 rows)
         large_df = pd.DataFrame({
@@ -334,6 +354,9 @@ def test_large_dataset():
     except Exception as e:
         print(f"❌ Large dataset test failed: {e}")
         raise
+    finally:
+        if test_db_path:
+            cleanup_test_db(test_db_path)
 
 
 def test_error_handling(manager):
@@ -366,8 +389,10 @@ def test_error_handling(manager):
 def test_sql_injection_protection():
     """Test SQL injection protection"""
     print("\n=== Test 15: SQL Injection Protection ===")
+    test_db_path = None
     try:
-        manager = DuckDBManager()
+        test_db_path = get_test_db_path()
+        manager = DuckDBManager(db_path=test_db_path, max_size_mb=100)
 
         # Create a benign dataset
         df = pd.DataFrame({'col1': [1, 2, 3], 'col2': ['a', 'b', 'c']})
@@ -437,13 +462,18 @@ def test_sql_injection_protection():
     except Exception as e:
         print(f"❌ SQL injection protection test failed: {e}")
         raise
+    finally:
+        if test_db_path:
+            cleanup_test_db(test_db_path)
 
 
 def test_cte_queries():
     """Test Common Table Expression (CTE) support"""
     print("\n=== Test 16: CTE Query Support ===")
+    test_db_path = None
     try:
-        manager = DuckDBManager()
+        test_db_path = get_test_db_path()
+        manager = DuckDBManager(db_path=test_db_path, max_size_mb=100)
 
         # Create test data
         df = pd.DataFrame({
@@ -499,13 +529,18 @@ def test_cte_queries():
     except Exception as e:
         print(f"❌ CTE query support test failed: {e}")
         raise
+    finally:
+        if test_db_path:
+            cleanup_test_db(test_db_path)
 
 
 def test_absolute_limit_enforcement():
     """Test that safety limit is always enforced"""
     print("\n=== Test 17: Absolute LIMIT Enforcement ===")
+    test_db_path = None
     try:
-        manager = DuckDBManager()
+        test_db_path = get_test_db_path()
+        manager = DuckDBManager(db_path=test_db_path, max_size_mb=100)
 
         # Create test data with 100 rows
         df = pd.DataFrame({
@@ -553,6 +588,9 @@ def test_absolute_limit_enforcement():
     except Exception as e:
         print(f"❌ Absolute LIMIT enforcement test failed: {e}")
         raise
+    finally:
+        if test_db_path:
+            cleanup_test_db(test_db_path)
 
 
 def run_all_tests():
@@ -561,10 +599,11 @@ def run_all_tests():
 
     tests_passed = 0
     tests_failed = 0
+    test_db_path = None
 
     try:
         # Test 1: Initialization
-        manager = test_initialization()
+        manager, test_db_path = test_initialization()
         tests_passed += 1
 
         # Test 2: Store DataFrame
@@ -634,6 +673,15 @@ def run_all_tests():
     except Exception as e:
         tests_failed += 1
         print(f"\n💥 Test suite stopped due to error: {e}")
+    finally:
+        # Clean up test database
+        if test_db_path:
+            print(f"\n🧹 Cleaning up test database at {test_db_path}")
+            try:
+                cleanup_test_db(test_db_path)
+                print("✅ Test database cleaned up")
+            except Exception as e:
+                print(f"⚠️  Failed to clean up test database: {e}")
 
     # Summary
     print("\n" + "="*60)
