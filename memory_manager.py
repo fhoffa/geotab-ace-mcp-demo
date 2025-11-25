@@ -195,6 +195,10 @@ class MemoryManager:
                 """
                 params_with_search = [search] + params + [limit]
                 results = self.conn.execute(query, params_with_search).fetchall()
+
+                # If FTS returns no results, fall back to LIKE
+                if not results:
+                    raise Exception("FTS returned no results, falling back to LIKE")
             except Exception:
                 # Fallback to LIKE search
                 conditions.append("(content ILIKE ? OR tags ILIKE ?)")
