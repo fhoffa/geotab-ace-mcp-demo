@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import re
+import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
@@ -86,11 +87,18 @@ class DuckDBManager:
         # Load existing metadata into memory
         self._load_metadata()
 
-        # Perform startup cleanup
-        self.cleanup_cache(max_age_days=14, max_size_mb=max_size_mb)
+        # Perform startup cleanup in background to avoid blocking initialization
+        cleanup_thread = threading.Thread(
+            target=self.cleanup_cache,
+            args=(14, max_size_mb),
+            daemon=True,
+            name="DuckDBCleanup"
+        )
+        cleanup_thread.start()
 
         logger.info(f"DuckDB manager initialized with persistent database at {db_path}")
         logger.info(f"Loaded {len(self.datasets)} existing datasets from cache")
+        logger.debug("Background cleanup thread started")
 
     def _init_metadata_table(self):
         """Create metadata tracking table for cache management with proper indexes."""
