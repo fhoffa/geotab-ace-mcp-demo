@@ -256,10 +256,11 @@ def test_list_datasets(manager):
 
 
 def test_get_sample_data(manager, table_name):
-    """Test getting sample data"""
+    """Test getting sample data using query with LIMIT"""
     print("\n=== Test 11: Get Sample Data ===")
     try:
-        sample_df = manager.get_sample_data(table_name, limit=3)
+        # Use query() instead of get_sample_data() - agent can handle LIMIT
+        sample_df, metadata = manager.query(f"SELECT * FROM {table_name} LIMIT 3")
 
         assert len(sample_df) == 3, "Should return 3 rows"
         assert 'device_id' in sample_df.columns, "Sample should have all columns"

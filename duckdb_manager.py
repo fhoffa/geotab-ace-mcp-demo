@@ -465,32 +465,6 @@ class DuckDBManager:
         """Check if a table exists in DuckDB."""
         return table_name in self.datasets
 
-    def get_sample_data(self, table_name: str, limit: int = 10) -> pd.DataFrame:
-        """
-        Get a sample of data from a table.
-
-        Args:
-            table_name: Name of the table to sample
-            limit: Number of rows to return
-
-        Returns:
-            DataFrame with sample data
-
-        Raises:
-            ValueError: If table doesn't exist or name is invalid
-        """
-        if not self.table_exists(table_name):
-            raise ValueError(f"Table '{table_name}' not found")
-
-        # Validate table name before using in query
-        self._validate_table_name(table_name)
-
-        # Track access
-        self._track_access(table_name)
-
-        # Safe to use table_name in query after validation
-        return self.conn.execute(f"SELECT * FROM {table_name} LIMIT {limit}").fetchdf()
-
     def cleanup_cache(self, max_age_days: int = 14, max_size_mb: int = 500,
                      keep_frequently_used: bool = True, min_access_count: int = 5):
         """
