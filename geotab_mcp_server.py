@@ -585,9 +585,9 @@ async def geotab_query_duckdb(table_name: str, sql_query: str, limit: int = 1000
 
         db_manager = get_duckdb_manager()
 
-        # Check if table exists
-        if not db_manager.table_exists(table_name):
-            available = db_manager.list_datasets()
+        # Check if table exists by listing datasets
+        available = db_manager.list_datasets()
+        if not any(ds['table_name'] == table_name for ds in available):
             if available:
                 table_list = "\n".join([f"• `{ds['table_name']}` ({ds['row_count']:,} rows)" for ds in available])
                 return f"Table '{table_name}' not found.\n\nAvailable tables:\n{table_list}\n\nUse geotab_list_cached_datasets() for more details."

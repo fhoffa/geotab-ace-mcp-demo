@@ -461,10 +461,6 @@ class DuckDBManager:
             for table_name, metadata in self.datasets.items()
         ]
 
-    def table_exists(self, table_name: str) -> bool:
-        """Check if a table exists in DuckDB."""
-        return table_name in self.datasets
-
     def cleanup_cache(self, max_age_days: int = 14, max_size_mb: int = 500,
                      keep_frequently_used: bool = True, min_access_count: int = 5):
         """

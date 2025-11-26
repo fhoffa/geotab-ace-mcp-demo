@@ -199,20 +199,6 @@ def test_limit_enforcement(manager, table_name):
         raise
 
 
-def test_table_exists(manager, table_name):
-    """Test table_exists method"""
-    print("\n=== Test 8: Table Exists Check ===")
-    try:
-        assert manager.table_exists(table_name), "Table should exist"
-        assert not manager.table_exists("nonexistent_table"), "Nonexistent table should return False"
-
-        print(f"✅ Table exists check test passed")
-        return True
-    except Exception as e:
-        print(f"❌ Table exists check test failed: {e}")
-        raise
-
-
 def test_get_dataset_info(manager, table_name):
     """Test getting dataset metadata"""
     print("\n=== Test 9: Get Dataset Info ===")
@@ -252,23 +238,6 @@ def test_list_datasets(manager):
         return True
     except Exception as e:
         print(f"❌ List datasets test failed: {e}")
-        raise
-
-
-def test_get_sample_data(manager, table_name):
-    """Test getting sample data using query with LIMIT"""
-    print("\n=== Test 11: Get Sample Data ===")
-    try:
-        # Use query() instead of get_sample_data() - agent can handle LIMIT
-        sample_df, metadata = manager.query(f"SELECT * FROM {table_name} LIMIT 3")
-
-        assert len(sample_df) == 3, "Should return 3 rows"
-        assert 'device_id' in sample_df.columns, "Sample should have all columns"
-
-        print(f"✅ Get sample data test passed - returned {len(sample_df)} rows")
-        return True
-    except Exception as e:
-        print(f"❌ Get sample data test failed: {e}")
         raise
 
 
@@ -631,43 +600,35 @@ def run_all_tests():
         test_limit_enforcement(manager, table_name)
         tests_passed += 1
 
-        # Test 8: Table Exists
-        test_table_exists(manager, table_name)
-        tests_passed += 1
-
-        # Test 9: Get Dataset Info
+        # Test 8: Get Dataset Info
         test_get_dataset_info(manager, table_name)
         tests_passed += 1
 
-        # Test 10: List Datasets
+        # Test 9: List Datasets
         test_list_datasets(manager)
         tests_passed += 1
 
-        # Test 11: Get Sample Data
-        test_get_sample_data(manager, table_name)
-        tests_passed += 1
-
-        # Test 12: Multiple Datasets
+        # Test 10: Multiple Datasets
         test_multiple_datasets(manager)
         tests_passed += 1
 
-        # Test 13: Large Dataset
+        # Test 11: Large Dataset
         test_large_dataset()
         tests_passed += 1
 
-        # Test 14: Error Handling
+        # Test 12: Error Handling
         test_error_handling(manager)
         tests_passed += 1
 
-        # Test 15: SQL Injection Protection
+        # Test 13: SQL Injection Protection
         test_sql_injection_protection()
         tests_passed += 1
 
-        # Test 16: CTE Query Support
+        # Test 14: CTE Query Support
         test_cte_queries()
         tests_passed += 1
 
-        # Test 17: Absolute LIMIT Enforcement
+        # Test 15: Absolute LIMIT Enforcement
         test_absolute_limit_enforcement()
         tests_passed += 1
 
