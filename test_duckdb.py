@@ -222,17 +222,27 @@ def test_get_dataset_info(manager, table_name):
 
 
 def test_list_datasets(manager):
-    """Test listing all datasets"""
-    print("\n=== Test 10: List Datasets ===")
+    """Test listing all datasets with cache info"""
+    print("\n=== Test 9: List Datasets ===")
     try:
-        datasets = manager.list_datasets()
+        result = manager.list_datasets()
+        datasets = result['datasets']
+        cache_info = result['cache_info']
 
         assert len(datasets) >= 1, "Should have at least 1 dataset"
         assert 'table_name' in datasets[0], "Dataset should have table_name"
         assert 'row_count' in datasets[0], "Dataset should have row_count"
         assert 'columns' in datasets[0], "Dataset should have columns"
 
+        # Check cache_info structure
+        assert 'total_datasets' in cache_info, "Should have total_datasets"
+        assert 'total_size_mb' in cache_info, "Should have total_size_mb"
+        assert 'cleanup_recommended' in cache_info, "Should have cleanup_recommended"
+
         print(f"✅ List datasets test passed - found {len(datasets)} dataset(s)")
+        print(f"   Cache: {cache_info['total_size_mb']}MB / {cache_info['max_size_mb']}MB")
+        if cache_info['cleanup_recommended']:
+            print(f"   ⚠️  {cache_info['cleanup_reason']}")
         for ds in datasets:
             print(f"   - {ds['table_name']}: {ds['row_count']} rows, {ds['column_count']} columns")
         return True
@@ -261,7 +271,8 @@ def test_multiple_datasets(manager):
         )
 
         # Verify both tables exist
-        datasets = manager.list_datasets()
+        result = manager.list_datasets()
+        datasets = result['datasets']
         assert len(datasets) == 2, "Should have 2 datasets now"
 
         # Query second table

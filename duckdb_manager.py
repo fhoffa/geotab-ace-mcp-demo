@@ -9,7 +9,6 @@ import json
 import logging
 import os
 import re
-import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
@@ -87,18 +86,8 @@ class DuckDBManager:
         # Load existing metadata into memory
         self._load_metadata()
 
-        # Perform startup cleanup in background to avoid blocking initialization
-        cleanup_thread = threading.Thread(
-            target=self.cleanup_cache,
-            args=(14, max_size_mb),
-            daemon=True,
-            name="DuckDBCleanup"
-        )
-        cleanup_thread.start()
-
         logger.info(f"DuckDB manager initialized with persistent database at {db_path}")
         logger.info(f"Loaded {len(self.datasets)} existing datasets from cache")
-        logger.debug("Background cleanup thread started")
 
     def _init_metadata_table(self):
         """Create metadata tracking table for cache management with proper indexes."""
@@ -451,15 +440,58 @@ class DuckDBManager:
         """Get metadata about a stored dataset."""
         return self.datasets.get(table_name)
 
-    def list_datasets(self) -> List[Dict]:
-        """List all stored datasets with their metadata."""
-        return [
+    def list_datasets(self) -> Dict:
+        """
+        List all stored datasets with their metadata and cache status hints.
+
+        Returns:
+            Dict with 'datasets' list and 'cache_info' dict containing cleanup hints
+        """
+        datasets = [
             {
                 "table_name": table_name,
                 **metadata
             }
             for table_name, metadata in self.datasets.items()
         ]
+
+        # Calculate cache status for cleanup hints
+        total_size = self._get_total_cache_size()
+        total_size_mb = total_size // 1024 // 1024
+
+        # Find oldest dataset
+        oldest_age_days = 0
+        if self.datasets:
+            now = datetime.now()
+            for metadata in self.datasets.values():
+                last_accessed = datetime.fromisoformat(
+                    metadata.get('last_accessed_at', metadata['created_at'])
+                )
+                age_days = (now - last_accessed).days
+                oldest_age_days = max(oldest_age_days, age_days)
+
+        # Determine if cleanup recommended
+        cleanup_recommended = False
+        cleanup_reason = None
+
+        if total_size_mb > self.max_size_mb * 0.8:  # 80% threshold
+            cleanup_recommended = True
+            cleanup_reason = f"Cache size approaching limit ({total_size_mb}/{self.max_size_mb} MB)"
+        elif oldest_age_days > 14:
+            cleanup_recommended = True
+            cleanup_reason = f"Old datasets detected (oldest: {oldest_age_days} days)"
+
+        return {
+            "datasets": datasets,
+            "cache_info": {
+                "total_datasets": len(datasets),
+                "total_size_mb": total_size_mb,
+                "max_size_mb": self.max_size_mb,
+                "oldest_dataset_age_days": oldest_age_days,
+                "cleanup_recommended": cleanup_recommended,
+                "cleanup_reason": cleanup_reason
+            }
+        }
 
     def cleanup_cache(self, max_age_days: int = 14, max_size_mb: int = 500,
                      keep_frequently_used: bool = True, min_access_count: int = 5):
