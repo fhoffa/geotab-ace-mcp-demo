@@ -181,17 +181,19 @@ async def geotab_ask_question(question: str, timeout_seconds: int = 60, account:
             return response
             
         except TimeoutError:
+            account_param = f", account='{account}'" if account else ""
             return f"""⏱️ Query is taking longer than {timeout_seconds} seconds to process.
 
 ❓ **Question**: {question[:200]}{'...' if len(question) > 200 else ''}
 
 📋 **Tracking Information**:
-• Chat ID: `{chat_id}`  
+• Chat ID: `{chat_id}`
 • Message Group ID: `{message_group_id}`
+{f"• Account: `{account}`" if account else ""}
 
 🔄 **Next Steps**:
-• Use `geotab_check_status('{chat_id}', '{message_group_id}')` to check progress
-• Use `geotab_get_results('{chat_id}', '{message_group_id}')` to get results when ready"""
+• Use `geotab_check_status('{chat_id}', '{message_group_id}'{account_param})` to check progress
+• Use `geotab_get_results('{chat_id}', '{message_group_id}'{account_param})` to get results when ready"""
             
     except AuthenticationError as e:
         logger.error(f"Authentication error: {e}")
@@ -438,7 +440,8 @@ async def geotab_start_query_async(question: str, account: Optional[str] = None)
 
         client = get_ace_client(account)
         chat_id, message_group_id = await client.start_query(question.strip())
-        
+
+        account_param = f", account='{account}'" if account else ""
         return f"""🚀 **Query Started Successfully**
 
 ❓ **Question**: {question[:300]}{'...' if len(question) > 300 else ''}
@@ -446,10 +449,11 @@ async def geotab_start_query_async(question: str, account: Optional[str] = None)
 🆔 **Tracking Information**:
 • Chat ID: `{chat_id}`
 • Message Group ID: `{message_group_id}`
+{f"• Account: `{account}`" if account else ""}
 
 🔄 **Next Steps**:
-1. **Check Status**: `geotab_check_status('{chat_id}', '{message_group_id}')`
-2. **Get Results**: `geotab_get_results('{chat_id}', '{message_group_id}')` (when ready)
+1. **Check Status**: `geotab_check_status('{chat_id}', '{message_group_id}'{account_param})`
+2. **Get Results**: `geotab_get_results('{chat_id}', '{message_group_id}'{account_param})` (when ready)
 
 ⏱️ **Expected Processing Time**: 30 seconds to 5 minutes depending on query complexity"""
         

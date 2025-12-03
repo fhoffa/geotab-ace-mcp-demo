@@ -535,7 +535,13 @@ class GeotabACEClient:
         """Parse API response into QueryResult object with enhanced data extraction."""
         results = api_response.get("result", {}).get("apiResult", {}).get("results", [])
         if not results:
-            raise APIError("Invalid response structure from status check")
+            # Provide more detailed error information
+            result = api_response.get("result", {})
+            api_result = result.get("apiResult", {})
+            logger.error(f"Invalid response structure. Response keys: {list(api_response.keys())}")
+            logger.error(f"Result keys: {list(result.keys())}")
+            logger.error(f"API result keys: {list(api_result.keys())}")
+            raise APIError(f"Invalid response structure from status check. Expected 'results' array but got: {list(api_result.keys())}")
             
         message_group = results[0].get("message_group", {})
         status_obj = message_group.get("status", {})
