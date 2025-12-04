@@ -92,26 +92,22 @@ def get_ace_client(account: Optional[str] = None) -> GeotabACEClient:
 def format_query_result(result, chat_id: str = "", message_group_id: str = "") -> str:
     """Format a QueryResult for display focusing on key information."""
     parts = []
-    
+
     if result.status == QueryStatus.DONE:
-        # Show SQL query first if available
-        if result.sql_query:
-            parts.append(f"**SQL Query:**\n```sql\n{result.sql_query}\n```")
-        
-        # Show reasoning 
+        # Show analysis/reasoning first (the answer)
         if result.reasoning:
             parts.append(f"**Analysis:**\n{result.reasoning}")
-        
+
         # Show interpretation if different from reasoning
         if result.interpretation and result.interpretation != result.reasoning:
             parts.append(f"**Interpretation:**\n{result.interpretation}")
 
-        # Data results
+        # Data results (the actual data)
         if result.data_frame is not None and not result.data_frame.empty:
             df = result.data_frame
             preview_rows = min(20, len(df))
             preview_table = df.head(preview_rows).to_string(index=False, max_colwidth=40)
-            
+
             parts.append(f"**Data Results ({len(df)} rows):**")
             parts.append(f"```\n{preview_table}\n```")
 
@@ -123,6 +119,10 @@ def format_query_result(result, chat_id: str = "", message_group_id: str = "") -
 
         elif result.preview_data:
             parts.append(f"**Data Preview:**\n```json\n{json.dumps(result.preview_data[:3], indent=2)}\n```")
+
+        # Show SQL query last (technical implementation details)
+        if result.sql_query:
+            parts.append(f"**SQL Query:**\n```sql\n{result.sql_query}\n```")
 
         if not parts:
             parts.append("Query completed but no results returned.")
