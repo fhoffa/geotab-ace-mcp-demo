@@ -595,7 +595,12 @@ async def geotab_debug_query(chat_id: str, message_group_id: str, account: Optio
 
 
 @mcp.tool()
-async def geotab_query_duckdb(table_name: str, sql_query: str, limit: int = 1000) -> str:
+async def geotab_query_duckdb(
+    table_name: str,
+    sql_query: str,
+    limit: int = 1000,
+    show_original_query: bool = False
+) -> str:
     """
     Execute a SQL query on a dataset cached in DuckDB.
 
@@ -606,6 +611,7 @@ async def geotab_query_duckdb(table_name: str, sql_query: str, limit: int = 1000
         table_name (str): Name of the table to query (provided when dataset was loaded)
         sql_query (str): SQL query to execute (DuckDB SQL syntax)
         limit (int): Maximum rows to return (default: 1000, safety limit)
+        show_original_query (bool): Include the original Ace SQL query (default: False)
 
     Returns:
         str: Query results formatted as a table with metadata
@@ -661,10 +667,11 @@ async def geotab_query_duckdb(table_name: str, sql_query: str, limit: int = 1000
                     except Exception:
                         continue
 
-        # Show the original dataset info
-        dataset_info = db_manager.get_dataset_info(table_name)
-        if dataset_info and dataset_info.get('sql_query'):
-            parts.append(f"\n**Original Ace Query:**\n```sql\n{dataset_info['sql_query']}\n```")
+        # Optionally show the original dataset info
+        if show_original_query:
+            dataset_info = db_manager.get_dataset_info(table_name)
+            if dataset_info and dataset_info.get('sql_query'):
+                parts.append(f"\n**Original Ace Query:**\n```sql\n{dataset_info['sql_query']}\n```")
 
         return "\n".join(parts)
 
