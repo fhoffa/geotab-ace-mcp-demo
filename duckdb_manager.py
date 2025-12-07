@@ -72,8 +72,10 @@ class DuckDBManager:
                     "Relative path escapes current directory"
                 )
 
-        # Create data directory if it doesn't exist
-        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        # Create data directory if it doesn't exist (handle edge case of no directory)
+        db_dir = os.path.dirname(db_path)
+        if db_dir:
+            os.makedirs(db_dir, exist_ok=True)
 
         self.db_path = db_path
         self.max_size_mb = max_size_mb
@@ -678,6 +680,13 @@ class DuckDBManager:
 
             # Create consolidated table name
             consolidated_name = f"ace_{self._sanitize_identifier(tid)}_consolidated_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+            # Validate the consolidated name before use
+            try:
+                self._validate_table_name(consolidated_name)
+            except ValueError:
+                logger.warning(f"Generated invalid consolidated name: {consolidated_name}, skipping")
+                continue
 
             try:
                 # Union all tables

@@ -286,13 +286,13 @@ async def geotab_get_results(chat_id: str, message_group_id: str, include_full_d
         if result.data_frame is not None and not result.data_frame.empty:
             df = result.data_frame
 
-            # For datasets >40 rows, load into DuckDB for SQL-based analysis and joins
+            # For datasets >20 rows, load into DuckDB for SQL-based analysis and joins
             # Threshold rationale:
-            # - Datasets with 40+ rows benefit from SQL joins and aggregations
+            # - Datasets with 20+ rows benefit from SQL joins and aggregations
             # - DuckDB enables persistent caching across sessions (data survives restarts)
             # - Lower threshold enables better multi-dataset analysis via joins
             # - Provides better UX by showing metadata + sample instead of flooding with data
-            DUCKDB_THRESHOLD = 40
+            DUCKDB_THRESHOLD = 20
             if len(df) > DUCKDB_THRESHOLD:
                 # Store in DuckDB
                 db_manager = get_duckdb_manager()
