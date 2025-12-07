@@ -45,16 +45,7 @@ sql = "SELECT * FROM ace_123 WHERE ..."  # model queries via SQL
 
 **Why this works:** SQL is effectively "code execution" - we run queries server-side and return only results. More deterministic than agent-written code.
 
-### ✅ Response Format Parameter (Just Added)
-
-Tools now support `response_format="concise"` (default) or `"detailed"`:
-
-- **Concise**: Analysis + essential data only (~40-60% token savings)
-- **Detailed**: Includes SQL queries, tracking IDs, full metadata
-
-Implementation: `geotab_ask_question()` and `geotab_check_status()`
-
-### ✅ Other Best Practices Already Implemented
+### ✅ Best Practices Already Implemented
 
 1. **Namespacing**: All tools prefixed with `geotab_`
 2. **Tool consolidation**: `geotab_ask_question` handles auth + query + format in one call
@@ -67,7 +58,32 @@ Implementation: `geotab_ask_question()` and `geotab_check_status()`
 
 ### High Priority
 
-#### 1. Enhance Error Messages (2-3 hours)
+#### 1. Add Response Format Parameter (2-3 hours)
+
+**Concept:** Add `response_format` parameter to control verbosity
+
+**Implementation:**
+```python
+@mcp.tool()
+async def geotab_ask_question(
+    question: str,
+    response_format: str = "concise"  # or "detailed"
+) -> str:
+    """
+    response_format options:
+    - "concise": Analysis + essential data only (40-60% token savings)
+    - "detailed": Full metadata, SQL queries, tracking IDs
+    """
+```
+
+**Benefits:**
+- Token efficiency: ~40-60% reduction in concise mode
+- Flexibility: Users choose verbosity based on needs
+- Backward compatible: Default to current behavior or concise mode
+
+**Apply to:** `geotab_ask_question`, `geotab_check_status`, `geotab_get_results`
+
+#### 2. Enhance Error Messages (2-3 hours)
 
 **Current:**
 ```python
@@ -88,7 +104,7 @@ Error: {e}"""
 
 **Apply to:** All tools with auth, API, timeout, and validation errors
 
-#### 2. Prompt-Engineer Tool Descriptions (3-4 hours)
+#### 3. Prompt-Engineer Tool Descriptions (3-4 hours)
 
 **Current:**
 ```python
@@ -122,7 +138,7 @@ Example:
 
 **Apply to:** All 16 tools - clearer purpose, usage guidance, and examples
 
-#### 3. Replace Cryptic IDs with Semantic Names (1-2 hours)
+#### 4. Replace Cryptic IDs with Semantic Names (1-2 hours)
 
 **Current:**
 ```python
@@ -143,7 +159,7 @@ tracking = f"Fleet analysis query started at {timestamp}"
 
 ### Medium Priority
 
-#### 4. Build Evaluation Framework (4-8 hours initial)
+#### 5. Build Evaluation Framework (4-8 hours initial)
 
 Create systematic measurement of tool performance:
 
@@ -171,7 +187,7 @@ EVAL_TASKS = [
 - Prevent regressions
 - Guide optimization priorities
 
-#### 5. Add Consolidated High-Level Tools (2-4 hours)
+#### 6. Add Consolidated High-Level Tools (2-4 hours)
 
 **Pattern from article:** Instead of `list_users` + `list_events` + `create_event`, provide `schedule_event`
 
@@ -195,7 +211,7 @@ async def geotab_analyze_fleet_performance(
 
 ### Low Priority (Optional)
 
-#### 6. Code Execution Tool (Experimental, 4-6 hours)
+#### 7. Code Execution Tool (Experimental, 4-6 hours)
 
 Add optional tool for complex workflows awkward in SQL:
 
@@ -214,7 +230,7 @@ async def geotab_execute_workflow(script: str) -> str:
 
 **When needed:** Cross-account comparisons, conditional workflows, data transformations beyond SQL
 
-#### 7. Use Claude Code for Iterative Tool Optimization (Ongoing)
+#### 8. Use Claude Code for Iterative Tool Optimization (Ongoing)
 
 Anthropic's recommendation: Let Claude optimize tools against evaluations
 
@@ -230,19 +246,19 @@ Anthropic's recommendation: Let Claude optimize tools against evaluations
 
 ## Implementation Priority
 
-**Do now (high ROI, low effort):**
-1. ✅ `response_format` parameter (DONE)
-2. Enhanced error messages (3 hours)
-3. Prompt-engineered tool descriptions (4 hours)
+**Do next (high ROI, low effort):**
+1. `response_format` parameter (2-3 hours) - Token efficiency
+2. Enhanced error messages (2-3 hours) - Better UX
+3. Prompt-engineered tool descriptions (3-4 hours) - Improved tool selection
 
 **Do soon (enables measurement):**
-4. Evaluation framework (8 hours)
-5. Use evals to guide further optimization
+4. Semantic query IDs (1-2 hours) - Reduces hallucinations
+5. Evaluation framework (4-8 hours) - Systematic measurement
+6. Use evals to guide further optimization
 
 **Do later (optional enhancements):**
-6. Semantic query IDs (2 hours)
-7. Consolidated high-level tools (4 hours)
-8. Code execution tool (6 hours, if needed)
+7. Consolidated high-level tools (2-4 hours) - Workflow simplification
+8. Code execution tool (4-6 hours, if needed) - Advanced workflows
 
 ## Key Insight: We Already Solved the Main Problem
 
@@ -261,8 +277,8 @@ Our DuckDB caching pattern **already achieves the primary goal** of Anthropic's 
 
 Track these metrics as we implement improvements:
 
-- **Token efficiency:** Avg tokens per query (target: 30-50% reduction with concise mode)
-- **Tool accuracy:** % of correct tool selections (eval framework)
+- **Token efficiency:** Avg tokens per query (baseline measurement, then track reductions)
+- **Tool accuracy:** % of correct tool selections (via eval framework)
 - **Error recovery:** % of errors resolved by improved messages
 - **User satisfaction:** Qualitative feedback on tool ergonomics
 
@@ -276,4 +292,4 @@ Track these metrics as we implement improvements:
 ---
 
 **Last Updated:** 2025-01-15
-**Status:** Active - response_format implemented, error improvements next
+**Status:** Future roadmap - prioritized by ROI and implementation effort
