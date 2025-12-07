@@ -140,6 +140,72 @@ def format_query_result(result, chat_id: str = "", message_group_id: str = "") -
     return "\n\n".join(parts)
 
 
+# Lifecycle management
+@mcp.on_startup()
+async def startup():
+    """
+    Initialize resources on server startup.
+
+    This ensures all managers are properly initialized before processing
+    any tool requests, following FastMCP best practices for resource management.
+    """
+    logger.info("Initializing Geotab MCP server resources...")
+
+    # Initialize account manager
+    try:
+        account_mgr = get_account_manager()
+        logger.info(f"Account manager initialized with {len(account_mgr.accounts)} account(s)")
+    except Exception as e:
+        logger.warning(f"Account manager initialization warning: {e}")
+
+    # Initialize DuckDB manager
+    try:
+        get_duckdb_manager()
+        logger.info("DuckDB manager initialized")
+    except Exception as e:
+        logger.error(f"DuckDB manager initialization failed: {e}")
+
+    # Initialize memory manager
+    try:
+        get_memory_manager()
+        logger.info("Memory manager initialized")
+    except Exception as e:
+        logger.error(f"Memory manager initialization failed: {e}")
+
+    logger.info("Server startup complete - ready to accept requests")
+
+
+@mcp.on_shutdown()
+async def shutdown():
+    """
+    Clean up resources on server shutdown.
+
+    Ensures proper cleanup of database connections and other resources,
+    following FastMCP best practices.
+    """
+    logger.info("Shutting down Geotab MCP server...")
+
+    # Close DuckDB connection
+    global duckdb_manager
+    if duckdb_manager is not None:
+        try:
+            duckdb_manager.close()
+            logger.info("DuckDB manager closed")
+        except Exception as e:
+            logger.error(f"Error closing DuckDB manager: {e}")
+
+    # Close memory manager connection
+    global memory_manager
+    if memory_manager is not None:
+        try:
+            memory_manager.close()
+            logger.info("Memory manager closed")
+        except Exception as e:
+            logger.error(f"Error closing memory manager: {e}")
+
+    logger.info("Server shutdown complete")
+
+
 @mcp.tool()
 async def geotab_ask_question(question: str, timeout_seconds: int = 60, account: Optional[str] = None) -> str:
     """

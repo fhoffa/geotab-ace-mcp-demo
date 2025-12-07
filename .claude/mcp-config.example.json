@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "geotab": {
+      "command": "uv",
+      "args": ["run", "python", "/absolute/path/to/geotab_mcp_server.py"],
+      "cwd": "/absolute/path/to/geotab-ace-mcp-demo",
+      "env": {
+        "GEOTAB_LOG_LEVEL": "INFO",
+        "PYTHONUNBUFFERED": "1"
+      }
+    }
+  }
+}

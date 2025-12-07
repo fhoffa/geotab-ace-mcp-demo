@@ -86,7 +86,66 @@ Alternative using the installed script:
 }
 ```
 
-### 5. Restart Claude Desktop
+### 5. Configure VSCode (Alternative)
+
+If you're using **VSCode with the GitHub Copilot Chat extension**:
+
+1. Open VSCode Command Palette (`Cmd/Ctrl+Shift+P`)
+2. Search for "Preferences: Open User Settings (JSON)"
+3. Add the MCP server configuration:
+
+```json
+{
+  "github.copilot.chat.mcp.enabled": true,
+  "github.copilot.chat.mcp.servers": {
+    "geotab": {
+      "command": "uv",
+      "args": ["run", "python", "/absolute/path/to/geotab_mcp_server.py"],
+      "cwd": "/absolute/path/to/geotab-ace-mcp-demo",
+      "env": {
+        "GEOTAB_LOG_LEVEL": "INFO",
+        "PYTHONUNBUFFERED": "1"
+      }
+    }
+  }
+}
+```
+
+4. Reload VSCode for changes to take effect
+
+**Note**: For other VSCode setups, you may need to create an MCP configuration file at `.vscode/mcp.json` or use the MCP extension's configuration UI.
+
+### 6. Configure Claude Code CLI (Alternative)
+
+If you're using **Claude Code CLI**:
+
+Create or update your MCP configuration file at `~/.claude/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "geotab": {
+      "command": "uv",
+      "args": ["run", "python", "/absolute/path/to/geotab_mcp_server.py"],
+      "cwd": "/absolute/path/to/geotab-ace-mcp-demo",
+      "env": {
+        "GEOTAB_LOG_LEVEL": "INFO"
+      }
+    }
+  }
+}
+```
+
+Or use the interactive configuration:
+```bash
+# View available MCP servers
+claude config mcp list
+
+# Test the server
+uv run python geotab_mcp_server.py test
+```
+
+### 7. Restart Claude Desktop / VSCode / Claude Code
 
 The server will automatically load credentials from your `.env` file.
 

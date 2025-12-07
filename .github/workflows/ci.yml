@@ -1,0 +1,179 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+jobs:
+  lint:
+    name: Lint and Format Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v2
+
+      - name: Install dependencies
+        run: |
+          uv sync --all-groups
+
+      - name: Check code formatting with Black
+        run: |
+          uv run black --check .
+
+      - name: Lint with Ruff
+        run: |
+          uv run ruff check .
+
+      - name: Type check with MyPy
+        run: |
+          uv run mypy geotab_mcp_server.py geotab_ace.py duckdb_manager.py memory_manager.py
+        continue-on-error: true  # Don't fail on type errors initially
+
+  test:
+    name: Test Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10', '3.11', '3.12']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v2
+
+      - name: Install dependencies
+        run: |
+          uv sync --all-groups
+
+      - name: Run tests with pytest
+        run: |
+          uv run pytest tests/ -v --tb=short
+        env:
+          # Set dummy environment variables for tests that don't require real credentials
+          GEOTAB_API_USERNAME: test_user
+          GEOTAB_API_PASSWORD: test_password
+          GEOTAB_API_DATABASE: test_database
+
+      - name: Run tests with coverage
+        if: matrix.python-version == '3.10'
+        run: |
+          uv run pytest tests/ --cov=. --cov-report=xml --cov-report=term-missing
+        env:
+          GEOTAB_API_USERNAME: test_user
+          GEOTAB_API_PASSWORD: test_password
+          GEOTAB_API_DATABASE: test_database
+
+      - name: Upload coverage to Codecov
+        if: matrix.python-version == '3.10'
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage.xml
+          flags: unittests
+          name: codecov-umbrella
+          fail_ci_if_error: false
+
+  integration-test:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    # Only run integration tests if secrets are available
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v2
+
+      - name: Install dependencies
+        run: |
+          uv sync --all-groups
+
+      - name: Run integration tests
+        run: |
+          uv run pytest -v -m integration
+        env:
+          # Configure real credentials from GitHub secrets
+          GEOTAB_API_USERNAME: ${{ secrets.GEOTAB_API_USERNAME }}
+          GEOTAB_API_PASSWORD: ${{ secrets.GEOTAB_API_PASSWORD }}
+          GEOTAB_API_DATABASE: ${{ secrets.GEOTAB_API_DATABASE }}
+        continue-on-error: true  # Don't fail if integration tests fail
+
+  build:
+    name: Build Package
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v2
+
+      - name: Build package
+        run: |
+          uv build
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v2
+
+      - name: Install dependencies
+        run: |
+          uv sync --all-groups
+
+      - name: Run safety check
+        run: |
+          uv pip install safety
+          uv run safety check --json || true
+        continue-on-error: true  # Don't fail on security issues initially
+
+      - name: Run bandit security linter
+        run: |
+          uv pip install bandit
+          uv run bandit -r . -x ./tests,./build,./dist -f json || true
+        continue-on-error: true  # Don't fail on security issues initially
