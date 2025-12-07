@@ -19,6 +19,7 @@ from geotab_ace import (
     GeotabACEError, AuthenticationError, APIError, TimeoutError
 )
 from duckdb_manager import DuckDBManager
+from memory_manager import MemoryManager
 
 # Configure logging
 logging.basicConfig(
@@ -28,14 +29,43 @@ logging.basicConfig(
 )
 logger = logging.getLogger("geotab-mcp-server")
 
-# Create MCP server instance
-mcp = FastMCP("geotab-mcp-server")
+# Create MCP server instance with memory system instructions
+mcp = FastMCP(
+    "geotab-mcp-server",
+    instructions="""You have access to a persistent memory system for Geotab learnings.
+
+**Required behaviors:**
+- Before constructing complex queries, check memory with `geotab_recall` for relevant patterns or gotchas
+- After discovering API quirks, schema details, or useful patterns, save them with `geotab_remember`
+- At session start, use `geotab_get_memory_context` to load relevant context
+
+**What to remember:**
+- gotcha: Unexpected API behaviors, quirks
+- pattern: Successful query patterns to reuse
+- schema: Table/column information discovered
+- account-info: Fleet characteristics (size, timezone, data range)
+- error-resolution: How errors were resolved
+- performance: Slow vs fast query patterns
+
+This memory persists across sessions and helps avoid re-learning the same lessons."""
+)
 
 # Global account manager instance
 account_manager: Optional[AccountManager] = None
 
 # Global DuckDB manager instance
 duckdb_manager: Optional[DuckDBManager] = None
+
+# Global Memory manager instance
+memory_manager: Optional[MemoryManager] = None
+
+
+def get_memory_manager() -> MemoryManager:
+    """Get or create the memory manager instance."""
+    global memory_manager
+    if memory_manager is None:
+        memory_manager = MemoryManager()
+    return memory_manager
 
 
 def get_duckdb_manager() -> DuckDBManager:
@@ -62,26 +92,22 @@ def get_ace_client(account: Optional[str] = None) -> GeotabACEClient:
 def format_query_result(result, chat_id: str = "", message_group_id: str = "") -> str:
     """Format a QueryResult for display focusing on key information."""
     parts = []
-    
+
     if result.status == QueryStatus.DONE:
-        # Show SQL query first if available
-        if result.sql_query:
-            parts.append(f"**SQL Query:**\n```sql\n{result.sql_query}\n```")
-        
-        # Show reasoning 
+        # Show analysis/reasoning first (the answer)
         if result.reasoning:
             parts.append(f"**Analysis:**\n{result.reasoning}")
-        
+
         # Show interpretation if different from reasoning
         if result.interpretation and result.interpretation != result.reasoning:
             parts.append(f"**Interpretation:**\n{result.interpretation}")
 
-        # Data results
+        # Data results (the actual data)
         if result.data_frame is not None and not result.data_frame.empty:
             df = result.data_frame
             preview_rows = min(20, len(df))
             preview_table = df.head(preview_rows).to_string(index=False, max_colwidth=40)
-            
+
             parts.append(f"**Data Results ({len(df)} rows):**")
             parts.append(f"```\n{preview_table}\n```")
 
@@ -93,6 +119,10 @@ def format_query_result(result, chat_id: str = "", message_group_id: str = "") -
 
         elif result.preview_data:
             parts.append(f"**Data Preview:**\n```json\n{json.dumps(result.preview_data[:3], indent=2)}\n```")
+
+        # Show SQL query last (technical implementation details)
+        if result.sql_query:
+            parts.append(f"**SQL Query:**\n```sql\n{result.sql_query}\n```")
 
         if not parts:
             parts.append("Query completed but no results returned.")
@@ -151,17 +181,19 @@ async def geotab_ask_question(question: str, timeout_seconds: int = 60, account:
             return response
             
         except TimeoutError:
+            account_param = f", account='{account}'" if account else ""
             return f"""⏱️ Query is taking longer than {timeout_seconds} seconds to process.
 
 ❓ **Question**: {question[:200]}{'...' if len(question) > 200 else ''}
 
 📋 **Tracking Information**:
-• Chat ID: `{chat_id}`  
+• Chat ID: `{chat_id}`
 • Message Group ID: `{message_group_id}`
+{f"• Account: `{account}`" if account else ""}
 
 🔄 **Next Steps**:
-• Use `geotab_check_status('{chat_id}', '{message_group_id}')` to check progress
-• Use `geotab_get_results('{chat_id}', '{message_group_id}')` to get results when ready"""
+• Use `geotab_check_status('{chat_id}', '{message_group_id}'{account_param})` to check progress
+• Use `geotab_get_results('{chat_id}', '{message_group_id}'{account_param})` to get results when ready"""
             
     except AuthenticationError as e:
         logger.error(f"Authentication error: {e}")
@@ -408,7 +440,8 @@ async def geotab_start_query_async(question: str, account: Optional[str] = None)
 
         client = get_ace_client(account)
         chat_id, message_group_id = await client.start_query(question.strip())
-        
+
+        account_param = f", account='{account}'" if account else ""
         return f"""🚀 **Query Started Successfully**
 
 ❓ **Question**: {question[:300]}{'...' if len(question) > 300 else ''}
@@ -416,10 +449,11 @@ async def geotab_start_query_async(question: str, account: Optional[str] = None)
 🆔 **Tracking Information**:
 • Chat ID: `{chat_id}`
 • Message Group ID: `{message_group_id}`
+{f"• Account: `{account}`" if account else ""}
 
 🔄 **Next Steps**:
-1. **Check Status**: `geotab_check_status('{chat_id}', '{message_group_id}')`
-2. **Get Results**: `geotab_get_results('{chat_id}', '{message_group_id}')` (when ready)
+1. **Check Status**: `geotab_check_status('{chat_id}', '{message_group_id}'{account_param})`
+2. **Get Results**: `geotab_get_results('{chat_id}', '{message_group_id}'{account_param})` (when ready)
 
 ⏱️ **Expected Processing Time**: 30 seconds to 5 minutes depending on query complexity"""
         
@@ -561,7 +595,12 @@ async def geotab_debug_query(chat_id: str, message_group_id: str, account: Optio
 
 
 @mcp.tool()
-async def geotab_query_duckdb(table_name: str, sql_query: str, limit: int = 1000) -> str:
+async def geotab_query_duckdb(
+    table_name: str,
+    sql_query: str,
+    limit: int = 1000,
+    show_original_query: bool = False
+) -> str:
     """
     Execute a SQL query on a dataset cached in DuckDB.
 
@@ -572,6 +611,7 @@ async def geotab_query_duckdb(table_name: str, sql_query: str, limit: int = 1000
         table_name (str): Name of the table to query (provided when dataset was loaded)
         sql_query (str): SQL query to execute (DuckDB SQL syntax)
         limit (int): Maximum rows to return (default: 1000, safety limit)
+        show_original_query (bool): Include the original Ace SQL query (default: False)
 
     Returns:
         str: Query results formatted as a table with metadata
@@ -628,10 +668,11 @@ async def geotab_query_duckdb(table_name: str, sql_query: str, limit: int = 1000
                     except Exception:
                         continue
 
-        # Show the original dataset info
-        dataset_info = db_manager.get_dataset_info(table_name)
-        if dataset_info and dataset_info.get('sql_query'):
-            parts.append(f"\n**Original Ace Query:**\n```sql\n{dataset_info['sql_query']}\n```")
+        # Optionally show the original dataset info
+        if show_original_query:
+            dataset_info = db_manager.get_dataset_info(table_name)
+            if dataset_info and dataset_info.get('sql_query'):
+                parts.append(f"\n**Original Ace Query:**\n```sql\n{dataset_info['sql_query']}\n```")
 
         return "\n".join(parts)
 
@@ -784,11 +825,313 @@ GEOTAB_ACCOUNT_2_DATABASE=db2
         return f"Error listing accounts: {str(e)}"
 
 
+# =============================================================================
+# Memory Tools - Persistent storage for learnings and patterns
+# =============================================================================
+
+@mcp.tool()
+async def geotab_remember(
+    content: str,
+    category: str,
+    tags: list[str] = None,
+    account: Optional[str] = None
+) -> str:
+    """
+    Store a learning or finding for future reference.
+
+    Use this to remember API quirks, successful query patterns, schema details,
+    or anything useful for future Geotab work.
+
+    Args:
+        content (str): The finding/learning to remember
+        category (str): Type of memory - must be one of:
+            - gotcha: API quirks, unexpected behaviors
+            - pattern: Successful query patterns to reuse
+            - schema: Table/column information
+            - account-info: Fleet-specific characteristics
+            - error-resolution: How errors were resolved
+            - performance: Performance insights
+        tags (list[str], optional): Searchable tags like ["fuel", "date-range"]
+        account (str, optional): Which account this applies to (None = global)
+
+    Returns:
+        str: Confirmation with memory ID
+    """
+    try:
+        if not content or not content.strip():
+            return "Error: Memory content cannot be empty"
+
+        mgr = get_memory_manager()
+        mem_id = mgr.remember(
+            content=content,
+            category=category,
+            tags=tags or [],
+            account=account
+        )
+
+        return f"Stored memory [{mem_id}]\n\nCategory: {category}\nContent: {content[:100]}{'...' if len(content) > 100 else ''}"
+
+    except ValueError as e:
+        return f"Error: {e}"
+    except Exception as e:
+        logger.error(f"Error storing memory: {e}")
+        return f"Error storing memory: {e}"
+
+
+@mcp.tool()
+async def geotab_recall(
+    search: str = None,
+    category: str = None,
+    account: str = None,
+    limit: int = 20
+) -> str:
+    """
+    Search and retrieve stored memories.
+
+    Use this before constructing queries to check for relevant patterns or gotchas.
+
+    Args:
+        search (str, optional): Full-text search on content and tags
+        category (str, optional): Filter by category (gotcha, pattern, schema, etc.)
+        account (str, optional): Filter by account (also includes global memories)
+        limit (int): Maximum results to return (default: 20)
+
+    Returns:
+        str: Formatted list of matching memories
+    """
+    try:
+        mgr = get_memory_manager()
+        memories = mgr.recall(
+            search=search,
+            category=category,
+            account=account,
+            limit=limit
+        )
+
+        if not memories:
+            filters = []
+            if search:
+                filters.append(f"search='{search}'")
+            if category:
+                filters.append(f"category='{category}'")
+            if account:
+                filters.append(f"account='{account}'")
+            filter_str = ", ".join(filters) if filters else "none"
+            return f"No memories found (filters: {filter_str})"
+
+        parts = [f"Found {len(memories)} memories:\n"]
+        for m in memories:
+            age_str = f"{m['age_days']}d ago" if m['age_days'] > 0 else "today"
+            account_str = f" [{m['account']}]" if m['account'] else ""
+            tags_str = f" #{' #'.join(m['tags'])}" if m['tags'] else ""
+            parts.append(f"[{m['id']}] ({m['category']}{account_str}) {m['content'][:80]}{'...' if len(m['content']) > 80 else ''} - {age_str}{tags_str}")
+
+        return "\n".join(parts)
+
+    except ValueError as e:
+        return f"Error: {e}"
+    except Exception as e:
+        logger.error(f"Error recalling memories: {e}")
+        return f"Error recalling memories: {e}"
+
+
+@mcp.tool()
+async def geotab_get_memory_context(account: str = None) -> str:
+    """
+    Get relevant memories for session context.
+
+    Call this at the start of a session to load important context including:
+    - Recent learnings (last 7 days)
+    - All critical gotchas
+    - Account-specific information
+
+    Args:
+        account (str, optional): Focus on this account's memories
+
+    Returns:
+        str: Formatted context summary
+    """
+    try:
+        mgr = get_memory_manager()
+        return mgr.format_context_summary(account)
+
+    except Exception as e:
+        logger.error(f"Error getting memory context: {e}")
+        return f"Error getting memory context: {e}"
+
+
+@mcp.tool()
+async def geotab_list_memories(
+    category: str = None,
+    account: str = None,
+    limit: int = 50
+) -> str:
+    """
+    List all stored memories with full metadata.
+
+    Use this to browse and manage stored memories.
+
+    Args:
+        category (str, optional): Filter by category
+        account (str, optional): Filter by account
+        limit (int): Maximum results (default: 50)
+
+    Returns:
+        str: Formatted list with full metadata
+    """
+    try:
+        mgr = get_memory_manager()
+        memories = mgr.list_memories(
+            category=category,
+            account=account,
+            limit=limit
+        )
+
+        if not memories:
+            return "No memories stored yet."
+
+        parts = [f"Total: {len(memories)} memories\n"]
+        for m in memories:
+            account_str = f"[{m['account']}] " if m['account'] else "[global] "
+            tags_str = f"\n   Tags: {', '.join(m['tags'])}" if m['tags'] else ""
+            verified = m['last_verified'] or 'never'
+            parts.append(
+                f"**{m['id']}** - {m['category']} {account_str}\n"
+                f"   {m['content']}\n"
+                f"   Created: {m['created_at']} | Verified: {verified} | Used: {m['usage_count']}x{tags_str}"
+            )
+
+        return "\n\n".join(parts)
+
+    except Exception as e:
+        logger.error(f"Error listing memories: {e}")
+        return f"Error listing memories: {e}"
+
+
+@mcp.tool()
+async def geotab_update_memory(
+    memory_id: str,
+    content: str = None,
+    verified: bool = False
+) -> str:
+    """
+    Update a memory's content or mark it as verified.
+
+    Args:
+        memory_id (str): Memory ID to update
+        content (str, optional): New content
+        verified (bool): If True, update the last_verified timestamp
+
+    Returns:
+        str: Confirmation of update
+    """
+    try:
+        if not memory_id:
+            return "Error: memory_id is required"
+
+        mgr = get_memory_manager()
+        success = mgr.update_memory(
+            mem_id=memory_id,
+            content=content,
+            verified=verified
+        )
+
+        if success:
+            updates = []
+            if content:
+                updates.append("content updated")
+            if verified:
+                updates.append("marked as verified")
+            return f"Memory [{memory_id}] updated: {', '.join(updates)}"
+        else:
+            return f"Memory [{memory_id}] not found"
+
+    except Exception as e:
+        logger.error(f"Error updating memory: {e}")
+        return f"Error updating memory: {e}"
+
+
+@mcp.tool()
+async def geotab_forget(memory_id: str) -> str:
+    """
+    Delete a memory.
+
+    Args:
+        memory_id (str): Memory ID to delete
+
+    Returns:
+        str: Confirmation of deletion
+    """
+    try:
+        if not memory_id:
+            return "Error: memory_id is required"
+
+        mgr = get_memory_manager()
+        success = mgr.forget(memory_id)
+
+        if success:
+            return f"Memory [{memory_id}] deleted"
+        else:
+            return f"Memory [{memory_id}] not found"
+
+    except Exception as e:
+        logger.error(f"Error deleting memory: {e}")
+        return f"Error deleting memory: {e}"
+
+
+@mcp.tool()
+async def geotab_export_memories(file_path: str = None) -> str:
+    """
+    Export all memories to a JSON file for backup or sharing.
+
+    Args:
+        file_path (str, optional): Path to export file.
+            Defaults to ~/geotab_memories_export.json
+
+    Returns:
+        str: Path to exported file and summary
+    """
+    try:
+        mgr = get_memory_manager()
+        export_path = mgr.export_memories(file_path)
+        stats = mgr.get_stats()
+
+        return f"""Exported {stats['total_memories']} memories to:
+{export_path}
+
+Categories: {', '.join(f"{k}({v})" for k, v in stats['by_category'].items())}
+
+You can share this file or import it into another instance."""
+
+    except Exception as e:
+        logger.error(f"Error exporting memories: {e}")
+        return f"Error exporting memories: {e}"
+
+
+# =============================================================================
+# Resources
+# =============================================================================
+
+@mcp.resource("geotab://memory/context")
+def get_memory_context_resource():
+    """
+    Get memory context for session initialization.
+
+    This resource provides relevant memories including gotchas, recent learnings,
+    and can be attached to automatically load context at session start.
+    """
+    try:
+        mgr = get_memory_manager()
+        return mgr.format_context_summary()
+    except Exception as e:
+        return f"Error loading memory context: {e}"
+
+
 @mcp.resource("geotab://status")
 def get_server_status():
     """Get current server status and capability information."""
     try:
-        global account_manager, duckdb_manager
+        global account_manager, duckdb_manager, memory_manager
         db_info = {}
         if duckdb_manager is not None:
             datasets = duckdb_manager.list_datasets()
@@ -826,7 +1169,8 @@ def get_server_status():
                 "Async query processing",
                 "Comprehensive debugging",
                 "DuckDB caching for large datasets",
-                "SQL querying on cached data"
+                "SQL querying on cached data",
+                "Persistent memory for learnings"
             ],
             "tools_available": [
                 "geotab_ask_question",
@@ -837,7 +1181,14 @@ def get_server_status():
                 "geotab_debug_query",
                 "geotab_query_duckdb",
                 "geotab_list_cached_datasets",
-                "geotab_list_accounts"
+                "geotab_list_accounts",
+                "geotab_remember",
+                "geotab_recall",
+                "geotab_get_memory_context",
+                "geotab_list_memories",
+                "geotab_update_memory",
+                "geotab_forget",
+                "geotab_export_memories"
             ]
         }
     except Exception as e:
