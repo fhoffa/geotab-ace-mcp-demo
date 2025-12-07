@@ -318,13 +318,13 @@ async def geotab_get_results(chat_id: str, message_group_id: str, include_full_d
         if result.data_frame is not None and not result.data_frame.empty:
             df = result.data_frame
 
-            # For large datasets (>200 rows), load into DuckDB instead of returning all data
+            # For datasets >20 rows, load into DuckDB for SQL-based analysis and joins
             # Threshold rationale:
-            # - Claude can handle ~200 rows efficiently in context without overwhelming tokens
-            # - Larger datasets overwhelm token limits and reduce analysis quality
-            # - DuckDB enables SQL-based analysis which is more appropriate for large data
+            # - Datasets with 20+ rows benefit from SQL joins and aggregations
+            # - DuckDB enables persistent caching across sessions (data survives restarts)
+            # - Lower threshold enables better multi-dataset analysis via joins
             # - Provides better UX by showing metadata + sample instead of flooding with data
-            DUCKDB_THRESHOLD = 200
+            DUCKDB_THRESHOLD = 20
             if len(df) > DUCKDB_THRESHOLD:
                 # Store in DuckDB
                 db_manager = get_duckdb_manager()
@@ -625,9 +625,10 @@ async def geotab_query_duckdb(
 
         db_manager = get_duckdb_manager()
 
-        # Check if table exists
-        if not db_manager.table_exists(table_name):
-            available = db_manager.list_datasets()
+        # Check if table exists by listing datasets
+        result = db_manager.list_datasets()
+        available = result['datasets']
+        if not any(ds['table_name'] == table_name for ds in available):
             if available:
                 table_list = "\n".join([f"• `{ds['table_name']}` ({ds['row_count']:,} rows)" for ds in available])
                 return f"Table '{table_name}' not found.\n\nAvailable tables:\n{table_list}\n\nUse geotab_list_cached_datasets() for more details."
@@ -694,7 +695,9 @@ async def geotab_list_cached_datasets() -> str:
     """
     try:
         db_manager = get_duckdb_manager()
-        datasets = db_manager.list_datasets()
+        result = db_manager.list_datasets()
+        datasets = result['datasets']
+        cache_info = result['cache_info']
 
         if not datasets:
             return """No cached datasets available.
@@ -703,6 +706,11 @@ Large datasets (>200 rows) from Ace queries are automatically cached in DuckDB.
 When you retrieve results with more than 200 rows, they will appear here."""
 
         parts = [f"**Cached Datasets in DuckDB** ({len(datasets)} total)\n"]
+
+        # Add cleanup hint if recommended
+        if cache_info['cleanup_recommended']:
+            parts.append(f"⚠️ **Cleanup recommended:** {cache_info['cleanup_reason']}")
+            parts.append(f"💡 Run cleanup with: `geotab_cleanup_cache()`\n")
 
         for ds in datasets:
             parts.append(f"**Table: `{ds['table_name']}`**")
@@ -725,6 +733,38 @@ When you retrieve results with more than 200 rows, they will appear here."""
     except Exception as e:
         logger.error(f"Error listing datasets: {e}")
         return f"Error listing datasets: {str(e)}"
+
+
+@mcp.tool()
+async def geotab_cleanup_cache(max_age_days: int = 14, max_size_mb: int = 500) -> str:
+    """
+    Clean up old and unused DuckDB cached datasets.
+
+    Removes datasets that haven't been accessed in max_age_days and applies LRU
+    eviction if cache size exceeds max_size_mb. Frequently accessed tables are preserved.
+
+    Args:
+        max_age_days: Remove datasets not accessed in this many days (default: 14)
+        max_size_mb: Maximum cache size in MB before LRU cleanup (default: 500)
+
+    Returns:
+        str: Cleanup statistics and results
+    """
+    try:
+        db_manager = get_duckdb_manager()
+        result = db_manager.cleanup_cache(max_age_days=max_age_days, max_size_mb=max_size_mb)
+
+        parts = ["**Cache Cleanup Complete**\n"]
+        parts.append(f"• Removed {result['removed_count']} datasets")
+        parts.append(f"• Freed {result['removed_size_mb']} MB")
+        parts.append(f"• Remaining datasets: {result['remaining_datasets']}")
+        parts.append(f"• Current cache size: {result['cache_size_mb']} MB")
+
+        return "\n".join(parts)
+
+    except Exception as e:
+        logger.error(f"Error during cleanup: {e}")
+        return f"Error during cleanup: {str(e)}"
 
 
 @mcp.tool()
