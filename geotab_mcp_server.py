@@ -89,17 +89,28 @@ def get_ace_client(account: Optional[str] = None) -> GeotabACEClient:
     return get_account_manager().get_client(account)
 
 
-def format_query_result(result, chat_id: str = "", message_group_id: str = "") -> str:
-    """Format a QueryResult for display focusing on key information."""
+def format_query_result(result, chat_id: str = "", message_group_id: str = "", response_format: str = "concise") -> str:
+    """
+    Format a QueryResult for display focusing on key information.
+
+    Args:
+        result: QueryResult object to format
+        chat_id: Optional chat ID for tracking
+        message_group_id: Optional message group ID for tracking
+        response_format: "concise" (default) or "detailed"
+            - "concise": Shows only analysis and essential data (token-efficient)
+            - "detailed": Shows full metadata, SQL queries, and tracking IDs
+    """
     parts = []
+    is_concise = response_format == "concise"
 
     if result.status == QueryStatus.DONE:
         # Show analysis/reasoning first (the answer)
         if result.reasoning:
             parts.append(f"**Analysis:**\n{result.reasoning}")
 
-        # Show interpretation if different from reasoning
-        if result.interpretation and result.interpretation != result.reasoning:
+        # Show interpretation if different from reasoning (only in detailed mode)
+        if not is_concise and result.interpretation and result.interpretation != result.reasoning:
             parts.append(f"**Interpretation:**\n{result.interpretation}")
 
         # Data results (the actual data)
@@ -114,29 +125,36 @@ def format_query_result(result, chat_id: str = "", message_group_id: str = "") -
             if len(df) > preview_rows:
                 parts.append(f"*Showing {preview_rows} of {len(df)} total rows*")
 
-            if result.signed_urls:
+            if result.signed_urls and not is_concise:
                 parts.append("*Full dataset available via signed URL*")
 
         elif result.preview_data:
-            parts.append(f"**Data Preview:**\n```json\n{json.dumps(result.preview_data[:3], indent=2)}\n```")
+            preview_count = 3 if is_concise else 5
+            parts.append(f"**Data Preview:**\n```json\n{json.dumps(result.preview_data[:preview_count], indent=2)}\n```")
 
-        # Show SQL query last (technical implementation details)
-        if result.sql_query:
+        # Show SQL query only in detailed mode (technical implementation details)
+        if not is_concise and result.sql_query:
             parts.append(f"**SQL Query:**\n```sql\n{result.sql_query}\n```")
 
         if not parts:
             parts.append("Query completed but no results returned.")
-            
+
     elif result.status == QueryStatus.FAILED:
         parts.append(f"**Query Failed:** {result.error or 'Unknown error'}")
-        
+
     elif result.status in [QueryStatus.PROCESSING, QueryStatus.PENDING]:
         parts.append(f"**Status:** {result.status.value} - Still processing...")
+        # Show tracking IDs only in detailed mode or if they exist
         if chat_id and message_group_id:
-            parts.append(f"**Tracking:** Chat `{chat_id}`, Message Group `{message_group_id}`")
+            if is_concise:
+                # Concise: just mention how to check status
+                parts.append(f"*Use geotab_check_status to monitor progress*")
+            else:
+                # Detailed: show full tracking info
+                parts.append(f"**Tracking:** Chat `{chat_id}`, Message Group `{message_group_id}`")
     else:
         parts.append(f"**Unknown Status:** {result.status.value}")
-        
+
     return "\n\n".join(parts)
 
 
@@ -207,66 +225,109 @@ async def shutdown():
 
 
 @mcp.tool()
-async def geotab_ask_question(question: str, timeout_seconds: int = 60, account: Optional[str] = None) -> str:
+async def geotab_ask_question(
+    question: str,
+    timeout_seconds: int = 60,
+    account: Optional[str] = None,
+    response_format: str = "concise"
+) -> str:
     """
     Ask a question to Geotab ACE AI and wait for the response.
 
+    Use this for simple questions that complete within 60 seconds.
+    For complex analysis, use geotab_start_query_async instead.
+
     Args:
-        question (str): The question to ask the Geotab AI service
-        timeout_seconds (int): Maximum time to wait for response (default: 60 seconds)
-        account (str, optional): Account name to use. If not specified, uses default account.
+        question: The question to ask the Geotab AI service
+        timeout_seconds: Maximum time to wait for response (default: 60 seconds, range: 1-300)
+        account: Account name to use. If not specified, uses default account.
+        response_format: Format of the response:
+            - "concise" (default): Returns analysis and essential data only (token-efficient)
+            - "detailed": Includes SQL queries, tracking IDs, and full metadata
 
     Returns:
-        str: The response from Geotab AI, including SQL query, analysis, and data
+        Formatted response including analysis and data results
+
+    Example:
+        question = "How many active vehicles last week?"
+        response_format = "concise"  # Save tokens for simple queries
     """
     try:
         if not question or not question.strip():
-            return "❌ Error: Question cannot be empty"
+            return """❌ Error: Question cannot be empty
+
+Please provide a valid question about your Geotab fleet data.
+
+Example: "How many vehicles were active last week?" """
 
         if len(question) > 10000:
             return "❌ Error: Question too long (max 10,000 characters)"
 
-        logger.info(f"Asking question (timeout: {timeout_seconds}s, account: {account or 'default'}): {question[:100]}...")
+        # Validate response_format
+        if response_format not in ["concise", "detailed"]:
+            return f"""❌ Error: Invalid response_format '{response_format}'
+
+Valid options:
+• "concise" - Returns only analysis and essential data (recommended)
+• "detailed" - Includes SQL queries and full metadata"""
+
+        logger.info(f"Asking question (timeout: {timeout_seconds}s, account: {account or 'default'}, format: {response_format}): {question[:100]}...")
 
         client = get_ace_client(account)
-        
+
         # Start the query
         chat_id, message_group_id = await client.start_query(question.strip())
         logger.info(f"Started query: chat_id={chat_id}, message_group_id={message_group_id}")
-        
+
         try:
             # Wait for completion
             result = await client.wait_for_completion(chat_id, message_group_id, timeout_seconds)
-            
-            # Format the response
-            response = format_query_result(result, chat_id, message_group_id)
-            
-            # Add timing info and tracking
-            response += f"\n\n📋 **Query IDs**: Chat `{chat_id}`, Message Group `{message_group_id}`"
-            
+
+            # Format the response with the requested format
+            response = format_query_result(result, chat_id, message_group_id, response_format)
+
+            # Add tracking info only in detailed mode
+            if response_format == "detailed":
+                response += f"\n\n📋 **Query IDs**: Chat `{chat_id}`, Message Group `{message_group_id}`"
+
             return response
-            
+
         except TimeoutError:
             account_param = f", account='{account}'" if account else ""
             return f"""⏱️ Query is taking longer than {timeout_seconds} seconds to process.
 
 ❓ **Question**: {question[:200]}{'...' if len(question) > 200 else ''}
 
-📋 **Tracking Information**:
-• Chat ID: `{chat_id}`
-• Message Group ID: `{message_group_id}`
-{f"• Account: `{account}`" if account else ""}
-
 🔄 **Next Steps**:
 • Use `geotab_check_status('{chat_id}', '{message_group_id}'{account_param})` to check progress
-• Use `geotab_get_results('{chat_id}', '{message_group_id}'{account_param})` to get results when ready"""
-            
+• Use `geotab_get_results('{chat_id}', '{message_group_id}'{account_param})` to get results when ready
+
+💡 **Tip**: For long-running queries, use geotab_start_query_async instead."""
+
     except AuthenticationError as e:
         logger.error(f"Authentication error: {e}")
-        return f"🔐 **Authentication Error**: {e}\n\nPlease check your Geotab credentials in environment variables."
+        account_mgr = get_account_manager()
+        available = list(account_mgr.accounts.keys())
+        return f"""🔐 **Authentication Error**: {e}
+
+**Troubleshooting**:
+1. Verify credentials in .env file for account: {account or 'default'}
+2. Available accounts: {available}
+3. Test connection: geotab_test_connection(account='{account or "default"}')
+
+**Error details**: {e}"""
+
     except APIError as e:
         logger.error(f"API error: {e}")
-        return f"🌐 **API Error**: {e}"
+        return f"""🌐 **API Error**: {e}
+
+The Geotab ACE API returned an error. This might be temporary.
+
+**Suggested actions**:
+• Try again in a few moments
+• Simplify your question
+• Check Geotab service status"""
+
     except Exception as e:
         logger.error(f"Unexpected error: {e}")
         logger.error(traceback.format_exc())
@@ -274,38 +335,59 @@ async def geotab_ask_question(question: str, timeout_seconds: int = 60, account:
 
 
 @mcp.tool()
-async def geotab_check_status(chat_id: str, message_group_id: str, account: Optional[str] = None) -> str:
+async def geotab_check_status(
+    chat_id: str,
+    message_group_id: str,
+    account: Optional[str] = None,
+    response_format: str = "concise"
+) -> str:
     """
     Check the status of a running Geotab query.
 
     Args:
-        chat_id (str): Chat ID from a previous question
-        message_group_id (str): Message group ID from a previous question
-        account (str, optional): Account name to use. If not specified, uses default account.
+        chat_id: Chat ID from a previous query
+        message_group_id: Message group ID from a previous query
+        account: Account name to use. If not specified, uses default account.
+        response_format: Format of the response:
+            - "concise" (default): Returns only status and essential info
+            - "detailed": Includes full metadata and tracking details
 
     Returns:
-        str: Current status of the query with any available partial results
+        Current status with any available partial results
+
+    Example:
+        chat_id = "abc123"
+        message_group_id = "msg456"
     """
     try:
         if not chat_id or not message_group_id:
-            return "❌ Error: Both chat_id and message_group_id are required"
+            return """❌ Error: Both chat_id and message_group_id are required
+
+These IDs are provided when you start a query with geotab_start_query_async.
+
+Example: geotab_check_status("abc123", "msg456")"""
 
         logger.debug(f"Checking status for {chat_id}/{message_group_id}")
 
         client = get_ace_client(account)
         result = await client.get_query_status(chat_id, message_group_id)
-        
-        response = format_query_result(result, chat_id, message_group_id)
-        
+
+        response = format_query_result(result, chat_id, message_group_id, response_format)
+
         if result.status == QueryStatus.DONE:
-            response += f"\n\n🎯 **Get Full Results**: Use `geotab_get_results('{chat_id}', '{message_group_id}')` for complete data"
-            
+            account_param = f", account='{account}'" if account else ""
+            response += f"\n\n🎯 **Get Full Results**: Use `geotab_get_results('{chat_id}', '{message_group_id}'{account_param})` for complete data"
+
         return response
-        
+
     except AuthenticationError as e:
-        return f"🔐 **Authentication Error**: {e}"
+        return f"""🔐 **Authentication Error**: {e}
+
+Verify your Geotab credentials and account configuration."""
     except APIError as e:
-        return f"🌐 **API Error**: {e}"
+        return f"""🌐 **API Error**: {e}
+
+The query may have expired or been cancelled."""
     except Exception as e:
         logger.error(f"Error checking status: {e}")
         logger.error(traceback.format_exc())
