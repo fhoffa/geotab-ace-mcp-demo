@@ -412,8 +412,16 @@ For issues with:
 - **MCP integration**: Check the Claude Desktop documentation
 - **This server**: Check the troubleshooting section or review server logs
 
+## Further Documentation
+
+For a comprehensive guide on building custom MCP servers for Geotab, see the [Custom MCP Guide](https://github.com/fhoffa/geotab-vibe-guide/blob/main/guides/CUSTOM_MCP_GUIDE.md).
+
 ## Version Information
 
 - **API Version**: Uses Geotab API v1
 - **MCP Protocol**: Compatible with Claude Desktop MCP implementation
 - **Python**: Requires Python 3.7+
+
+## License
+
+This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
