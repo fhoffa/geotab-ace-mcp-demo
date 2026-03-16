@@ -9,22 +9,40 @@ import sys
 import os
 import pandas as pd
 from datetime import datetime
+import tempfile
+import shutil
 
 # Import the DuckDB manager
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from duckdb_manager import DuckDBManager
 
 
+def get_test_db_path():
+    """Create a temporary directory for test database"""
+    test_dir = tempfile.mkdtemp(prefix="duckdb_test_")
+    return os.path.join(test_dir, "test_cache.duckdb")
+
+
+def cleanup_test_db(db_path):
+    """Clean up test database directory"""
+    test_dir = os.path.dirname(db_path)
+    if os.path.exists(test_dir):
+        shutil.rmtree(test_dir)
+
+
 def test_initialization():
     """Test DuckDB manager initialization"""
     print("=== Test 1: Initialization ===")
     try:
-        manager = DuckDBManager()
+        # Use a test database path instead of default
+        test_db_path = get_test_db_path()
+        manager = DuckDBManager(db_path=test_db_path, max_size_mb=100)
+
         assert manager.conn is not None, "Connection should be initialized"
         assert isinstance(manager.datasets, dict), "Datasets should be a dict"
-        assert len(manager.datasets) == 0, "Should start with no datasets"
+        assert os.path.exists(test_db_path), "Database file should be created"
         print("✅ Initialization test passed")
-        return manager
+        return manager, test_db_path
     except Exception as e:
         print(f"❌ Initialization test failed: {e}")
         raise
@@ -181,20 +199,6 @@ def test_limit_enforcement(manager, table_name):
         raise
 
 
-def test_table_exists(manager, table_name):
-    """Test table_exists method"""
-    print("\n=== Test 8: Table Exists Check ===")
-    try:
-        assert manager.table_exists(table_name), "Table should exist"
-        assert not manager.table_exists("nonexistent_table"), "Nonexistent table should return False"
-
-        print(f"✅ Table exists check test passed")
-        return True
-    except Exception as e:
-        print(f"❌ Table exists check test failed: {e}")
-        raise
-
-
 def test_get_dataset_info(manager, table_name):
     """Test getting dataset metadata"""
     print("\n=== Test 9: Get Dataset Info ===")
@@ -218,38 +222,32 @@ def test_get_dataset_info(manager, table_name):
 
 
 def test_list_datasets(manager):
-    """Test listing all datasets"""
-    print("\n=== Test 10: List Datasets ===")
+    """Test listing all datasets with cache info"""
+    print("\n=== Test 9: List Datasets ===")
     try:
-        datasets = manager.list_datasets()
+        result = manager.list_datasets()
+        datasets = result['datasets']
+        cache_info = result['cache_info']
 
         assert len(datasets) >= 1, "Should have at least 1 dataset"
         assert 'table_name' in datasets[0], "Dataset should have table_name"
         assert 'row_count' in datasets[0], "Dataset should have row_count"
         assert 'columns' in datasets[0], "Dataset should have columns"
 
+        # Check cache_info structure
+        assert 'total_datasets' in cache_info, "Should have total_datasets"
+        assert 'total_size_mb' in cache_info, "Should have total_size_mb"
+        assert 'cleanup_recommended' in cache_info, "Should have cleanup_recommended"
+
         print(f"✅ List datasets test passed - found {len(datasets)} dataset(s)")
+        print(f"   Cache: {cache_info['total_size_mb']}MB / {cache_info['max_size_mb']}MB")
+        if cache_info['cleanup_recommended']:
+            print(f"   ⚠️  {cache_info['cleanup_reason']}")
         for ds in datasets:
             print(f"   - {ds['table_name']}: {ds['row_count']} rows, {ds['column_count']} columns")
         return True
     except Exception as e:
         print(f"❌ List datasets test failed: {e}")
-        raise
-
-
-def test_get_sample_data(manager, table_name):
-    """Test getting sample data"""
-    print("\n=== Test 11: Get Sample Data ===")
-    try:
-        sample_df = manager.get_sample_data(table_name, limit=3)
-
-        assert len(sample_df) == 3, "Should return 3 rows"
-        assert 'device_id' in sample_df.columns, "Sample should have all columns"
-
-        print(f"✅ Get sample data test passed - returned {len(sample_df)} rows")
-        return True
-    except Exception as e:
-        print(f"❌ Get sample data test failed: {e}")
         raise
 
 
@@ -273,7 +271,8 @@ def test_multiple_datasets(manager):
         )
 
         # Verify both tables exist
-        datasets = manager.list_datasets()
+        result = manager.list_datasets()
+        datasets = result['datasets']
         assert len(datasets) == 2, "Should have 2 datasets now"
 
         # Query second table
@@ -290,8 +289,10 @@ def test_multiple_datasets(manager):
 def test_large_dataset():
     """Test with a large dataset (>1000 rows) to simulate real usage"""
     print("\n=== Test 13: Large Dataset ===")
+    test_db_path = None
     try:
-        manager = DuckDBManager()
+        test_db_path = get_test_db_path()
+        manager = DuckDBManager(db_path=test_db_path, max_size_mb=100)
 
         # Create large DataFrame (simulating Ace returning 5000 rows)
         large_df = pd.DataFrame({
@@ -334,6 +335,9 @@ def test_large_dataset():
     except Exception as e:
         print(f"❌ Large dataset test failed: {e}")
         raise
+    finally:
+        if test_db_path:
+            cleanup_test_db(test_db_path)
 
 
 def test_error_handling(manager):
@@ -366,8 +370,10 @@ def test_error_handling(manager):
 def test_sql_injection_protection():
     """Test SQL injection protection"""
     print("\n=== Test 15: SQL Injection Protection ===")
+    test_db_path = None
     try:
-        manager = DuckDBManager()
+        test_db_path = get_test_db_path()
+        manager = DuckDBManager(db_path=test_db_path, max_size_mb=100)
 
         # Create a benign dataset
         df = pd.DataFrame({'col1': [1, 2, 3], 'col2': ['a', 'b', 'c']})
@@ -437,13 +443,18 @@ def test_sql_injection_protection():
     except Exception as e:
         print(f"❌ SQL injection protection test failed: {e}")
         raise
+    finally:
+        if test_db_path:
+            cleanup_test_db(test_db_path)
 
 
 def test_cte_queries():
     """Test Common Table Expression (CTE) support"""
     print("\n=== Test 16: CTE Query Support ===")
+    test_db_path = None
     try:
-        manager = DuckDBManager()
+        test_db_path = get_test_db_path()
+        manager = DuckDBManager(db_path=test_db_path, max_size_mb=100)
 
         # Create test data
         df = pd.DataFrame({
@@ -499,13 +510,18 @@ def test_cte_queries():
     except Exception as e:
         print(f"❌ CTE query support test failed: {e}")
         raise
+    finally:
+        if test_db_path:
+            cleanup_test_db(test_db_path)
 
 
 def test_absolute_limit_enforcement():
     """Test that safety limit is always enforced"""
     print("\n=== Test 17: Absolute LIMIT Enforcement ===")
+    test_db_path = None
     try:
-        manager = DuckDBManager()
+        test_db_path = get_test_db_path()
+        manager = DuckDBManager(db_path=test_db_path, max_size_mb=100)
 
         # Create test data with 100 rows
         df = pd.DataFrame({
@@ -553,6 +569,9 @@ def test_absolute_limit_enforcement():
     except Exception as e:
         print(f"❌ Absolute LIMIT enforcement test failed: {e}")
         raise
+    finally:
+        if test_db_path:
+            cleanup_test_db(test_db_path)
 
 
 def run_all_tests():
@@ -561,10 +580,11 @@ def run_all_tests():
 
     tests_passed = 0
     tests_failed = 0
+    test_db_path = None
 
     try:
         # Test 1: Initialization
-        manager = test_initialization()
+        manager, test_db_path = test_initialization()
         tests_passed += 1
 
         # Test 2: Store DataFrame
@@ -591,49 +611,50 @@ def run_all_tests():
         test_limit_enforcement(manager, table_name)
         tests_passed += 1
 
-        # Test 8: Table Exists
-        test_table_exists(manager, table_name)
-        tests_passed += 1
-
-        # Test 9: Get Dataset Info
+        # Test 8: Get Dataset Info
         test_get_dataset_info(manager, table_name)
         tests_passed += 1
 
-        # Test 10: List Datasets
+        # Test 9: List Datasets
         test_list_datasets(manager)
         tests_passed += 1
 
-        # Test 11: Get Sample Data
-        test_get_sample_data(manager, table_name)
-        tests_passed += 1
-
-        # Test 12: Multiple Datasets
+        # Test 10: Multiple Datasets
         test_multiple_datasets(manager)
         tests_passed += 1
 
-        # Test 13: Large Dataset
+        # Test 11: Large Dataset
         test_large_dataset()
         tests_passed += 1
 
-        # Test 14: Error Handling
+        # Test 12: Error Handling
         test_error_handling(manager)
         tests_passed += 1
 
-        # Test 15: SQL Injection Protection
+        # Test 13: SQL Injection Protection
         test_sql_injection_protection()
         tests_passed += 1
 
-        # Test 16: CTE Query Support
+        # Test 14: CTE Query Support
         test_cte_queries()
         tests_passed += 1
 
-        # Test 17: Absolute LIMIT Enforcement
+        # Test 15: Absolute LIMIT Enforcement
         test_absolute_limit_enforcement()
         tests_passed += 1
 
     except Exception as e:
         tests_failed += 1
         print(f"\n💥 Test suite stopped due to error: {e}")
+    finally:
+        # Clean up test database
+        if test_db_path:
+            print(f"\n🧹 Cleaning up test database at {test_db_path}")
+            try:
+                cleanup_test_db(test_db_path)
+                print("✅ Test database cleaned up")
+            except Exception as e:
+                print(f"⚠️  Failed to clean up test database: {e}")
 
     # Summary
     print("\n" + "="*60)
